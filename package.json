@@ -1,0 +1,19 @@
+{
+  "name": "nautilusuhc-dc",
+  "version": "1.0.0",
+  "description": "NautilusUHC Discord botu — moderasyon, guvenlik ve Minecraft UHC entegrasyonu",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node scripts/check.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "discord.js": "^14.16.3"
+  }
+}
