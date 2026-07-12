@@ -3,7 +3,7 @@ import {
   ChannelType,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { okEmbed, errEmbed, baseEmbed, Colors } from '../embeds.js';
+import { okEmbed, errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
 import { getSetting, setSetting, addCase } from '../db.js';
 import { config } from '../config.js';
 import { clean } from '../util.js';
@@ -225,6 +225,8 @@ export default [
         }
         const embed = baseEmbed(Colors.main)
           .setTitle('🔗 Minecraft Hesabını Bağla')
+          .setThumbnail(Assets.item.enderPearl)
+          .setImage(Assets.wordmarkScene)
           .setDescription(
             'Nautilus PvP maçlarına katılmak için Minecraft hesabını Discord hesabına bağlaman **zorunludur**.\n\n'
             + '**Nasıl yapılır?**\n'

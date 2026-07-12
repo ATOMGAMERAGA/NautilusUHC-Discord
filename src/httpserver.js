@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { config } from './config.js';
 import { getSetting } from './db.js';
-import { baseEmbed, Colors } from './embeds.js';
+import { baseEmbed, Colors, Assets } from './embeds.js';
 import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
 
 /**
@@ -17,6 +17,8 @@ function eventEmbed(type, data, test) {
     case 'match_scheduled': {
       const e = baseEmbed(test ? Colors.warn : Colors.info)
         .setTitle(`${test ? '🧪 TEST — ' : ''}📅 Maç Planlandı`)
+        .setThumbnail(Assets.item.diamondSword)
+        .setImage(Assets.wordmarkScene)
         .setDescription(`Yeni bir UHC maçı planlandı! Katılmak için sunucuya gir: \`nautilusuhc.com\``)
         .addFields(
           { name: '🕐 Başlangıç', value: `${discordTime(data.startsAt)} — **${data.slot ?? trDateTime(data.startsAt)}** (TR)`, inline: false },
@@ -43,6 +45,7 @@ function eventEmbed(type, data, test) {
     case 'match_start':
       return baseEmbed(test ? Colors.warn : Colors.success)
         .setTitle(`${test ? '🧪 TEST — ' : ''}⚔️ Maç Başladı!`)
+        .setThumbnail(Assets.item.diamondSword)
         .addFields(
           { name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true },
           { name: '👥 Oyuncu', value: String(data.players ?? '?'), inline: true },
@@ -53,6 +56,7 @@ function eventEmbed(type, data, test) {
     case 'match_end': {
       const e = baseEmbed(test ? Colors.warn : Colors.main)
         .setTitle(`${test ? '🧪 TEST — ' : ''}🏆 Maç Bitti!`)
+        .setThumbnail(Assets.item.goldenApple)
         .addFields(
           { name: '🥇 Kazanan', value: `**${clean(data.winner ?? '—', 40)}**`, inline: true },
         );
@@ -85,6 +89,7 @@ function eventEmbed(type, data, test) {
     case 'match_cancelled':
       return baseEmbed(Colors.danger)
         .setTitle(`${test ? '🧪 TEST — ' : ''}❌ Maç İptal Edildi`)
+        .setThumbnail(Assets.block.cobweb)
         .setDescription(`**Saat:** ${data.slot ?? '?'} (TR)\n**Host:** ${clean(data.host ?? '?', 30)}`
           + (data.reason ? `\n**Sebep:** ${clean(data.reason)}` : ''));
 
@@ -97,6 +102,7 @@ function eventEmbed(type, data, test) {
     case 'host_message':
       return baseEmbed(test ? Colors.warn : Colors.main)
         .setTitle(`${test ? '🧪 TEST — ' : ''}📣 Nautilus UHC — Host Duyuru`)
+        .setThumbnail(Assets.mark)
         .setDescription(clean(data.message ?? '', 3900))
         .addFields({ name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true });
 

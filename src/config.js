@@ -44,6 +44,13 @@ export const config = {
   /** Base URL of the NautilusUHC plugin bridge API (Pelican Panel host), e.g. http://1.2.3.4:8571 */
   mcApiUrl: env('MC_API_URL', '').replace(/\/+$/, ''),
 
+  /**
+   * Public base URL of the NautilusUHC website. The site serves its branding and
+   * Minecraft item icons under /assets, which the bot reuses in embeds so Discord
+   * and the website share one visual identity. No trailing slash.
+   */
+  siteUrl: env('SITE_URL', 'https://nautilusuhc.com').replace(/\/+$/, ''),
+
   /** Shared secret between the bot and the plugin (both directions). */
   bridgeSecret: env('BRIDGE_SECRET', ''),
 

@@ -1,7 +1,7 @@
 import { Events } from 'discord.js';
 import { config } from './config.js';
 import { getSetting } from './db.js';
-import { baseEmbed, Colors } from './embeds.js';
+import { baseEmbed, Colors, Assets } from './embeds.js';
 import { discordTime } from './util.js';
 
 /** Sends a welcome embed when a member joins (channel set via /admin hoşgeldin). */
@@ -22,6 +22,7 @@ export function registerWelcome(client) {
           + '➤ Maç saatleri ve detaylar için `/maç program` komutunu kullanabilirsin.\n'
           + '➤ Sunucu: `nautilusuhc.com`')
         .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setImage(Assets.wordmarkScene)
         .addFields({ name: 'Hesap açılışı', value: discordTime(member.user.createdTimestamp, 'R'), inline: true });
       await channel.send({ content: `${member.user}`, embeds: [embed] });
     } catch (err) {

@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { errEmbed, baseEmbed, Colors } from '../embeds.js';
+import { errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
 import { mcapi } from '../mcapi.js';
 import { casesOf } from '../db.js';
 import { rankFor, rankLabel } from '../ranks.js';
@@ -112,8 +112,10 @@ async function siralama(interaction) {
         : `${p.elo} ELO — ${rankLabel(p.elo)}`;
     return `${medal} \`${clean(p.name, 20)}\` — ${value}`;
   });
+  const thumb = by === 'kills' ? Assets.item.diamondSword : Assets.item.goldenApple;
   const embed = baseEmbed(Colors.main)
     .setTitle(titles[by] ?? titles.elo)
+    .setThumbnail(thumb)
     .setDescription(lines.join('\n'))
     .setFooter({ text: `Toplam ${res.totalPlayers} kayıtlı oyuncu • Nautilus PvP` });
   return interaction.editReply({ embeds: [embed] });

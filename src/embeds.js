@@ -1,4 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
+import { config } from './config.js';
 
 /** Nautilus PvP palette. */
 export const Colors = {
@@ -10,10 +11,55 @@ export const Colors = {
   dark: 0x2c3e50,
 };
 
-export function baseEmbed(color = Colors.main) {
+/** Build a URL to a file the website serves under /assets. */
+export const asset = (path) => `${config.siteUrl}/assets/${path.replace(/^\/+/, '')}`;
+
+/**
+ * Named handles for the website's own art, reused here so Discord embeds and the
+ * site share one identity. Grouped by intent:
+ *  - brand: logo/wordmark marks (PNG only — Discord can't render the SVG mark).
+ *  - block/item: vanilla Minecraft icons, used as thematic thumbnails.
+ * Discord requires https image URLs, so these resolve against config.siteUrl.
+ */
+export const Assets = {
+  /** Circular medallion mark — the global footer icon and brand thumbnail. */
+  mark: asset('nautilus-icon-mark.png'),
+  /** Wordmark on a scene — a hero banner for setImage (welcome, scheduling). */
+  wordmarkScene: asset('nautilus-wordmark-scene.png'),
+  /** Plain wordmark. */
+  wordmark: asset('nautilus-wordmark.png'),
+  /** Thin decorative strip — a divider for setImage at the foot of an embed. */
+  divider: asset('nautilus-divider-strip.png'),
+  block: {
+    cobblestone: asset('mc/block/cobblestone.png'),
+    cobweb: asset('mc/block/cobweb.png'),
+    oakPlanks: asset('mc/block/oak_planks.png'),
+    obsidian: asset('mc/block/obsidian.png'),
+  },
+  item: {
+    goldenApple: asset('mc/item/golden_apple.png'),
+    diamondSword: asset('mc/item/diamond_sword.png'),
+    diamondAxe: asset('mc/item/diamond_axe.png'),
+    diamondChestplate: asset('mc/item/diamond_chestplate.png'),
+    ironSword: asset('mc/item/iron_sword.png'),
+    bow: asset('mc/item/bow.png'),
+    enderPearl: asset('mc/item/ender_pearl.png'),
+    fishingRod: asset('mc/item/fishing_rod.png'),
+    enchantedBook: asset('mc/item/enchanted_book.png'),
+    potion: asset('mc/item/potion.png'),
+    diamond: asset('mc/item/diamond.png'),
+  },
+};
+
+/**
+ * Every embed carries the Nautilus mark in its footer, so the whole bot reads as
+ * one branded surface. Pass an item/block icon as `icon` to override (e.g. a
+ * golden apple on the match-result embed).
+ */
+export function baseEmbed(color = Colors.main, icon = Assets.mark) {
   return new EmbedBuilder()
     .setColor(color)
-    .setFooter({ text: 'Nautilus PvP • nautilusuhc.com' })
+    .setFooter({ text: 'Nautilus PvP • nautilusuhc.com', iconURL: icon })
     .setTimestamp();
 }
 

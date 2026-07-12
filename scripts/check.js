@@ -5,6 +5,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -15,7 +16,8 @@ function walk(dir, out = []) {
   return out;
 }
 
-const files = walk(new URL('../src', import.meta.url).pathname);
+// fileURLToPath: URL.pathname Windows'ta "/A:/..." döndürüp patlıyordu.
+const files = walk(fileURLToPath(new URL('../src', import.meta.url)));
 let failed = false;
 for (const file of files) {
   const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });

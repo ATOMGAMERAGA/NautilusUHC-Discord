@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { Tier, hasTier } from '../permissions.js';
-import { errEmbed, baseEmbed, Colors } from '../embeds.js';
+import { errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
 import { mcapi } from '../mcapi.js';
 import { formatSeconds, trDateTime, discordTime, clean } from '../util.js';
 
@@ -53,6 +53,7 @@ async function macBilgi(interaction) {
   }
   const embed = baseEmbed(Colors.main)
     .setTitle('⚔️ Aktif Maç')
+    .setThumbnail(Assets.item.diamondSword)
     .addFields(
       { name: 'Aşama', value: String(res.state ?? '?'), inline: true },
       { name: 'Geçen Süre', value: formatSeconds(res.elapsedSecs ?? 0), inline: true },
@@ -109,6 +110,7 @@ async function macDetay(interaction) {
   if (!m) return interaction.editReply({ embeds: [errEmbed(`#${id} numaralı maç bulunamadı.`)] });
   const embed = baseEmbed(Colors.main)
     .setTitle(`📊 Maç #${id}`)
+    .setThumbnail(Assets.item.goldenApple)
     .addFields(
       { name: '🏆 Kazanan', value: clean(m.winner ?? '—', 60), inline: true },
       { name: '⏱️ Süre', value: formatSeconds(m.durationSecs ?? 0), inline: true },
@@ -144,6 +146,7 @@ async function macEnvanter(interaction) {
   const reasonText = res.reason === 'death' ? '💀 ölüm anında' : '🏁 maç sonunda (hayatta)';
   const embed = baseEmbed(Colors.info)
     .setTitle(`🎒 Envanter Snapshot — ${clean(res.name, 30)} (Maç #${id})`)
+    .setThumbnail(Assets.item.diamondChestplate)
     .setDescription(`Kayıt: ${reasonText} • ${trDateTime(res.capturedAt)} TR`)
     .addFields(
       { name: '❤️ Can', value: `${(res.health ?? 0).toFixed(1)} / 20`, inline: true },
