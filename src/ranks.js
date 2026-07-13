@@ -5,13 +5,15 @@ import { getSetting, setSetting } from './db.js';
  * admins edit it with /admin elorank. Each tier: { name, min, emoji, color }.
  */
 
+// Canonical ELO ladder — birebir plugin EloTier ile aynı (isim + eşik + renk).
+// netherite hariç hepsi Türkçe. Değiştirirsen plugin/site ile senkron tut.
 export const DEFAULT_RANKS = [
-  { name: 'Şampiyon', min: 2200, emoji: '👑', color: 0xff2d78 },
-  { name: 'Elmas', min: 1800, emoji: '💎', color: 0x4fd7ff },
-  { name: 'Zümrüt', min: 1500, emoji: '🟢', color: 0x2ecc71 },
-  { name: 'Altın', min: 1250, emoji: '🥇', color: 0xf1c40f },
-  { name: 'Demir', min: 1000, emoji: '⚙️', color: 0xbdc3c7 },
-  { name: 'Taş', min: 0, emoji: '🪨', color: 0x7f8c8d },
+  { name: 'Netherite', min: 2000, emoji: '⬛', color: 0x6d6a68 },
+  { name: 'Elmas', min: 1800, emoji: '💎', color: 0x4aedd9 },
+  { name: 'Zümrüt', min: 1600, emoji: '🟢', color: 0x2ecc71 },
+  { name: 'Altın', min: 1400, emoji: '🥇', color: 0xffd700 },
+  { name: 'Demir', min: 1200, emoji: '⚙️', color: 0xd8d8d8 },
+  { name: 'Bakır', min: 0, emoji: '🟤', color: 0xb87333 },
 ];
 
 /** Current ladder, highest tier first. Falls back to defaults on bad data. */

@@ -59,8 +59,8 @@ kullanır (süreli cezalar desteklenir: `10dk`, `2sa`, `7g`).
   Parametresiz kullanınca kendi bağlı hesabını gösterir.
 - `/sıralama elo|galibiyet|kill` — ilk 10 liderlik tablosu (rank kademeleriyle).
 - **Ayarlanabilir rank kademeleri:** `/admin elorank liste|ekle|sil|sıfırla` —
-  varsayılan merdiven: 🪨 Taş → ⚙️ Demir (1000) → 🥇 Altın (1250) → 🟢 Zümrüt (1500)
-  → 💎 Elmas (1800) → 👑 Şampiyon (2200).
+  varsayılan merdiven (plugin EloTier ile birebir): 🟤 Bakır → ⚙️ Demir (1200)
+  → 🥇 Altın (1400) → 🟢 Zümrüt (1600) → 💎 Elmas (1800) → ⬛ Netherite (2000).
 - `/sicil @kullanıcı` — botun uyguladığı tüm işlemlerin geçmişi (case kaydı).
 
 ### Süreli ban & kalıcı zamanlayıcı
