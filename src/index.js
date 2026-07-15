@@ -21,9 +21,14 @@ import utility from './commands/utility.js';
 import stats from './commands/stats.js';
 import fun from './commands/fun.js';
 import destek from './commands/destek.js';
+import bildirim from './commands/bildirim.js';
+import saglik from './commands/saglik.js';
+import { dispatchMatchDms } from './matchdm.js';
+import { registerTicketMessages, startTicketWatcher } from './tickets.js';
 
 const allCommands = [
   ...moderation, ...mc, ...mac, ...link, ...admin, ...utility, ...stats, ...fun, ...destek,
+  ...bildirim, ...saglik,
 ];
 const commandMap = new Map(allCommands.map((c) => [c.data.name, c]));
 
@@ -93,8 +98,12 @@ client.once(Events.ClientReady, async () => {
     console.error('[bot] Komut kaydı başarısız:', err);
   }
 
-  startHttpServer(client);
+  // Kanal duyurusu başarıyla gönderilen her event, /maç-bildirim DM
+  // dağıtımına da akar (yalnız match_start && !test gönderir; bkz. matchdm.js).
+  startHttpServer(client, { onEvent: (envelope) => dispatchMatchDms(client, envelope) });
   startScheduler(client);
+  // Destek sistemi: kanalı silinmiş talepleri kapat + SLA/hareketsizlik gözcüsü.
+  startTicketWatcher(client);
 });
 
 /* ------------------------------------------------------------------ */
@@ -121,7 +130,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.isButton() || interaction.isModalSubmit()) {
+    if (interaction.isButton() || interaction.isModalSubmit() || interaction.isAnySelectMenu()) {
       const handler = resolveComponent(interaction.customId);
       if (handler) await handler(interaction);
     }
@@ -144,6 +153,7 @@ registerGuard(client);
 registerAutomod(client);
 registerMessageLog(client);
 registerWelcome(client);
+registerTicketMessages(client); // destek kanallarındaki her mesaj tam transcript'e yazılır
 
 process.on('unhandledRejection', (err) => console.error('[bot] unhandledRejection:', err));
 

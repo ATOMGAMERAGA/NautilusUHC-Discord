@@ -1,16 +1,76 @@
 import { createServer } from 'node:http';
+import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { config } from './config.js';
-import { getSetting } from './db.js';
+import { getSetting, processedEvents } from './db.js';
 import { baseEmbed, Colors, Assets } from './embeds.js';
 import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
 
 /**
  * Receives lifecycle events from the NautilusUHC plugin (Pelican host) and turns
- * them into Turkish embeds in the match announcement channel. Authenticated with
- * the shared bridge secret.
+ * them into Turkish embeds in the match announcement channel.
  *
- * POST /api/event  { type, test?, data }
+ * POST /api/event
+ *   Zarf v2: { eventId, schemaVersion: 2, type, occurredAt, test, matchId?, data }
+ *   Zarf v1 (legacy): { type, test?, data }
+ *
+ * Auth (docs/INTEGRATION-CONTRACT.md):
+ *   Tercih edilen — HMAC-SHA256 imza başlıkları:
+ *     X-Nautilus-Timestamp: epoch ms
+ *     X-Nautilus-Nonce:     UUID (istek başına benzersiz)
+ *     X-Nautilus-Signature: hex hmacSha256(secret, `${ts}.${nonce}.${rawBody}`)
+ *   Legacy (config.bridgeAllowLegacy iken) — X-Bridge-Secret: <secret>
+ *
+ * Idempotency: eventId varsa processed_events üzerinden dedup edilir; aynı
+ * eventId'nin retry'ı 200 döner ama ikinci bir Discord mesajı ÜRETMEZ.
  */
+
+const SCHEMA_VERSIONS = [1, 2];
+const EVENT_TYPES = ['match_scheduled', 'match_start', 'match_end', 'match_cancelled', 'message', 'host_message'];
+
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+/** Görülen nonce'lar (replay engeli). Pencere dışına düşenler budanır. */
+const seenNonces = new Map(); // nonce -> timestamp(ms)
+
+function pruneNonces(windowMs, now = Date.now()) {
+  for (const [nonce, ts] of seenNonces) {
+    if (now - ts > windowMs) seenNonces.delete(nonce);
+  }
+}
+
+/**
+ * HMAC imzalı isteği doğrular. Dönüş: null = geçerli, aksi hâlde hata kodu.
+ * Test edilebilirlik için saf tutulur (now enjekte edilebilir).
+ */
+export function verifySignature({ timestamp, nonce, signature }, rawBody, secret, {
+  windowMs = config.bridgeReplayWindowMs,
+  now = Date.now(),
+  nonces = seenNonces,
+} = {}) {
+  if (!timestamp || !nonce || !signature) return 'missing_signature_headers';
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) return 'bad_timestamp';
+  if (Math.abs(now - ts) > windowMs) return 'timestamp_out_of_window';
+  if (nonces.has(nonce)) return 'replay';
+  const expected = createHmac('sha256', secret).update(`${timestamp}.${nonce}.${rawBody}`).digest('hex');
+  if (!safeEqual(signature.toLowerCase(), expected)) return 'bad_signature';
+  nonces.set(nonce, ts);
+  if (nonces.size > 10_000) pruneNonces(windowMs, now);
+  return null;
+}
+
+/** Basit IP başına kayan pencere rate limiti. */
+const rateBuckets = new Map(); // ip -> number[]
+function rateLimited(ip, { limit = 60, windowMs = 60_000, now = Date.now() } = {}) {
+  const arr = (rateBuckets.get(ip) ?? []).filter((t) => now - t < windowMs);
+  arr.push(now);
+  rateBuckets.set(ip, arr);
+  return arr.length > limit;
+}
 
 function eventEmbed(type, data, test) {
   switch (type) {
@@ -111,22 +171,58 @@ function eventEmbed(type, data, test) {
   }
 }
 
-export function startHttpServer(client) {
-  const server = createServer((req, res) => {
+/**
+ * Kanal duyurusunun payload'ını üretir (embed + rol etiketi + allowedMentions).
+ * DM aboneliği (Faz 4) aynı üreticiyi kullanır ki içerik drift etmesin.
+ */
+export function buildAnnouncement(type, data, test) {
+  const embed = eventEmbed(type, data, test);
+  if (!embed) return null;
+  let content;
+  const allowedMentions = { parse: [] };
+  if (!test && (type === 'match_scheduled' || type === 'match_start')) {
+    const pingRole = getSetting('match_ping_role', '');
+    if (pingRole) {
+      content = `<@&${pingRole}>`;
+      allowedMentions.roles = [pingRole];
+    }
+  }
+  return { content, embeds: [embed], allowedMentions };
+}
+
+/**
+ * HTTP handler'ı üretir. `hooks.onEvent(envelope)` — event başarıyla kanala
+ * gönderildikten sonra çağrılır (Faz 4 DM dağıtımı buradan beslenir).
+ * Test edilebilirlik için client/hooks enjekte edilir.
+ */
+export function createRequestHandler(client, hooks = {}) {
+  return (req, res) => {
     const respond = (status, body) => {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(body));
     };
 
     if (req.method === 'GET' && req.url === '/health') {
       return respond(200, { ok: true, bot: client.isReady() });
     }
+    if (req.method === 'GET' && req.url === '/api/capabilities') {
+      return respond(200, {
+        ok: true,
+        service: 'nautilusuhc-discord',
+        schemaVersions: SCHEMA_VERSIONS,
+        eventTypes: EVENT_TYPES,
+        auth: config.bridgeAllowLegacy ? ['hmac-sha256', 'legacy-shared-secret'] : ['hmac-sha256'],
+      });
+    }
     if (req.method !== 'POST' || req.url !== '/api/event') {
       return respond(404, { ok: false, error: 'not_found' });
     }
 
-    const secret = req.headers['x-bridge-secret'];
-    if (!config.bridgeSecret || secret !== config.bridgeSecret) {
+    const ip = req.socket?.remoteAddress ?? '?';
+    if (rateLimited(ip)) {
+      return respond(429, { ok: false, error: 'rate_limited', mesaj: 'Çok fazla istek; kısa süre sonra tekrar dene.' });
+    }
+    if (!config.bridgeSecret) {
       return respond(401, { ok: false, error: 'unauthorized' });
     }
 
@@ -136,32 +232,78 @@ export function startHttpServer(client) {
       if (raw.length > 256_000) req.destroy();
     });
     req.on('end', async () => {
-      try {
-        const { type, test = false, data = {} } = JSON.parse(raw || '{}');
-        const embed = eventEmbed(type, data, test);
-        if (!embed) return respond(400, { ok: false, error: 'unknown_event_type' });
+      // ---- Auth: önce HMAC, yoksa (izinliyse) legacy shared secret ----
+      const sigHeaders = {
+        timestamp: req.headers['x-nautilus-timestamp'],
+        nonce: req.headers['x-nautilus-nonce'],
+        signature: req.headers['x-nautilus-signature'],
+      };
+      const hasSig = sigHeaders.timestamp || sigHeaders.nonce || sigHeaders.signature;
+      if (hasSig) {
+        const err = verifySignature(sigHeaders, raw, config.bridgeSecret);
+        if (err) return respond(401, { ok: false, error: `unauthorized:${err}` });
+      } else if (config.bridgeAllowLegacy) {
+        const secret = req.headers['x-bridge-secret'];
+        if (!secret || !safeEqual(secret, config.bridgeSecret)) {
+          return respond(401, { ok: false, error: 'unauthorized' });
+        }
+      } else {
+        return respond(401, { ok: false, error: 'unauthorized:signature_required' });
+      }
 
+      let envelope;
+      try {
+        envelope = JSON.parse(raw || '{}');
+      } catch {
+        return respond(400, { ok: false, error: 'bad_json' });
+      }
+      const { type, test = false, data = {}, eventId = null, schemaVersion = 1 } = envelope;
+      const correlationId = eventId ?? randomUUID();
+      if (!SCHEMA_VERSIONS.includes(schemaVersion)) {
+        return respond(422, {
+          ok: false, error: 'unsupported_schema_version', correlationId,
+          mesaj: `Desteklenen şema sürümleri: ${SCHEMA_VERSIONS.join(', ')}`,
+        });
+      }
+      const embedPayload = buildAnnouncement(type, data, test);
+      if (!embedPayload) return respond(400, { ok: false, error: 'unknown_event_type', correlationId });
+
+      // ---- Idempotency: eventId'yi göndermeden ÖNCE sahiplen ----
+      if (eventId && !processedEvents.claim(eventId, type)) {
+        console.log(`[bridge] duplicate event yoksayıldı: ${type} ${eventId}`);
+        return respond(200, { ok: true, duplicate: true, correlationId });
+      }
+
+      try {
         const channelId = data.channelId ?? config.matchChannelId;
         const channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased()) {
-          return respond(502, { ok: false, error: 'channel_unavailable' });
+          if (eventId) processedEvents.release(eventId); // retry edilebilsin
+          return respond(502, { ok: false, error: 'channel_unavailable', correlationId });
         }
-        // Maç duyurularında bildirim rolünü etiketle (test hariç).
-        let content;
-        if (!test && (type === 'match_scheduled' || type === 'match_start')) {
-          const pingRole = getSetting('match_ping_role', '');
-          if (pingRole) content = `<@&${pingRole}>`;
+        await channel.send(embedPayload);
+        console.log(`[bridge] olay işlendi: ${type}${test ? ' (test)' : ''} (${correlationId})`);
+        // Kanal duyurusu sonrası hook (ör. Faz 4 DM dağıtımı). Hook hatası
+        // event işlemesini geriye döndürmez; ayrıca loglanır.
+        try {
+          await hooks.onEvent?.({ type, test, data, eventId, schemaVersion });
+        } catch (hookErr) {
+          console.error(`[bridge] onEvent hook hatası (${correlationId}):`, hookErr.message);
         }
-        await channel.send({ content, embeds: [embed] });
-        console.log(`[bridge] olay işlendi: ${type}${test ? ' (test)' : ''}`);
-        return respond(200, { ok: true });
+        return respond(200, { ok: true, correlationId });
       } catch (err) {
-        console.error('[bridge] olay hatası:', err.message);
-        return respond(400, { ok: false, error: 'bad_request' });
+        if (eventId) processedEvents.release(eventId);
+        console.error(`[bridge] olay hatası (${correlationId}):`, err.message);
+        return respond(500, { ok: false, error: 'internal_error', correlationId });
       }
     });
-  });
+  };
+}
 
+export function startHttpServer(client, hooks = {}) {
+  processedEvents.prune();
+  const server = createServer(createRequestHandler(client, hooks));
+  server.requestTimeout = 30_000;
   server.listen(config.port, () => {
     console.log(`[bridge] HTTP sunucusu ${config.port} portunda dinliyor`);
   });

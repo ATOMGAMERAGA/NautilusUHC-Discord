@@ -1,0 +1,22 @@
+{
+  "eventId": "7c2b8a44-95d0-49c7-a1de-6a2f0b1c3333",
+  "schemaVersion": 2,
+  "type": "match_end",
+  "occurredAt": "2026-07-14T19:12:45Z",
+  "test": false,
+  "matchId": 42,
+  "data": {
+    "matchId": 42,
+    "winner": "AtomGamer",
+    "durationSecs": 4362,
+    "participantCount": 24,
+    "endedAt": 1784229165000,
+    "top": [
+      { "name": "AtomGamer", "kills": 6 },
+      { "name": "Oyuncu2", "kills": 4 }
+    ],
+    "mvpName": "Oyuncu2",
+    "mvpVotes": 9,
+    "mvpKills": 4
+  }
+}

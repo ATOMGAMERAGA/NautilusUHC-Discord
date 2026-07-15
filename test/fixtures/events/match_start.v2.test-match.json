@@ -1,0 +1,13 @@
+{
+  "eventId": "9adf2b70-52e6-4f4e-b7d0-4b1f9c2ce222",
+  "schemaVersion": 2,
+  "type": "match_start",
+  "occurredAt": "2026-07-14T15:30:00Z",
+  "test": true,
+  "data": {
+    "host": "AtomGamer",
+    "players": 2,
+    "scenarios": [],
+    "startedAt": 1784215800000
+  }
+}

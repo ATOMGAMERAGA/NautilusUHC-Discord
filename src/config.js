@@ -54,6 +54,16 @@ export const config = {
   /** Shared secret between the bot and the plugin (both directions). */
   bridgeSecret: env('BRIDGE_SECRET', ''),
 
+  /**
+   * Geçiş modu: HMAC imzasız (yalnız X-Bridge-Secret başlıklı) eski plugin
+   * isteklerini kabul et. Plugin HMAC'e geçtikten sonra BRIDGE_ALLOW_LEGACY=0
+   * yapılmalı. (bkz. docs/INTEGRATION-CONTRACT.md)
+   */
+  bridgeAllowLegacy: env('BRIDGE_ALLOW_LEGACY', '1') === '1',
+
+  /** HMAC imzalı isteklerde kabul edilen saat sapması / replay penceresi (ms). */
+  bridgeReplayWindowMs: Number.parseInt(env('BRIDGE_REPLAY_WINDOW_MS', '300000'), 10),
+
   /** HTTP port the bot listens on for plugin events (Coolify exposes it). */
   port: Number.parseInt(env('PORT', '8080'), 10),
 

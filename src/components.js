@@ -3,11 +3,12 @@ import {
 } from 'discord.js';
 import { okEmbed, errEmbed } from './embeds.js';
 import { mcapi } from './mcapi.js';
-import { addCase, giveaways, polls } from './db.js';
+import { addCase, giveaways, polls, dmSubscriptions } from './db.js';
+import { confirmDecision } from './matchdm.js';
 import { clean } from './util.js';
 import { sendLog } from './modlog.js';
 import { Colors } from './embeds.js';
-import { openTicket, closeTicket } from './tickets.js';
+import { ticketComponents } from './tickets.js';
 
 /**
  * Component (button / modal) handlers, keyed by customId prefix. The link flow:
@@ -65,10 +66,24 @@ export const componentHandlers = {
     });
   },
 
-  /* ---------------- Destek talepleri ---------------- */
+  /* ---------------- /maç-bildirim onay akışı ---------------- */
 
-  'ticket:open': (interaction) => openTicket(interaction),
-  'ticket:close': (interaction) => closeTicket(interaction),
+  'bildirim:ac': (interaction) => handleBildirimToggle(interaction, true),
+  'bildirim:kapat': (interaction) => handleBildirimToggle(interaction, false),
+  'bildirim:vazgec': async (interaction) => {
+    const d = confirmDecision(interaction.customId, interaction.user.id);
+    if (d === 'not_owner') {
+      return interaction.reply({ embeds: [errEmbed('Bu buton sana ait değil.')], ephemeral: true });
+    }
+    return interaction.update({
+      embeds: [okEmbed('Değişiklik yapılmadı.')],
+      components: [],
+    });
+  },
+
+  /* ---------------- Destek talepleri (Faz 5: tickets.js) ---------------- */
+
+  ...ticketComponents,
 
   /* ---------------- Çekiliş katılımı ---------------- */
 
@@ -144,6 +159,31 @@ export const componentHandlers = {
 };
 
 /** Finds the handler whose key matches the interaction's customId prefix. */
+/**
+ * /maç-bildirim onay butonu: yalnız komut sahibi, TTL içinde. Değişiklik
+ * ancak bu açık onayla uygulanır; sonuç ephemeral güncellenir.
+ */
+async function handleBildirimToggle(interaction, enable) {
+  const d = confirmDecision(interaction.customId, interaction.user.id);
+  if (d === 'not_owner') {
+    return interaction.reply({ embeds: [errEmbed('Bu buton sana ait değil.')], ephemeral: true });
+  }
+  if (d === 'expired') {
+    return interaction.update({
+      embeds: [errEmbed('Bu onayın süresi doldu. Lütfen `/maç-bildirim` komutunu yeniden kullan.')],
+      components: [],
+    });
+  }
+  dmSubscriptions.set(d.ownerId, enable);
+  return interaction.update({
+    embeds: [okEmbed(enable
+      ? '🔔 Maç bildirimi **açıldı**. Normal bir maç başladığında duyurunun kopyası DM olarak gelecek. '
+        + '(Test maçları dahil değildir.) İstediğin zaman `/maç-bildirim` ile kapatabilirsin.'
+      : '🔕 Maç bildirimi **kapatıldı**. Artık maç başlangıcında DM almayacaksın.')],
+    components: [],
+  });
+}
+
 export function resolveComponent(customId) {
   for (const [prefix, handler] of Object.entries(componentHandlers)) {
     if (customId === prefix || customId.startsWith(`${prefix}:`)) return handler;

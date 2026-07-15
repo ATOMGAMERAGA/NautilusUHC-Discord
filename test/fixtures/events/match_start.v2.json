@@ -1,0 +1,14 @@
+{
+  "eventId": "1f6f5c1e-3d3a-4f2c-9a51-8f9f0a7f2c11",
+  "schemaVersion": 2,
+  "type": "match_start",
+  "occurredAt": "2026-07-14T18:00:03Z",
+  "test": false,
+  "matchId": 42,
+  "data": {
+    "host": "AtomGamer",
+    "players": 24,
+    "scenarios": ["Timber", "GoldenHeads"],
+    "startedAt": 1784224803000
+  }
+}

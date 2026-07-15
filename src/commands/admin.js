@@ -8,6 +8,8 @@ import { getSetting, setSetting, addCase } from '../db.js';
 import { config } from '../config.js';
 import { clean } from '../util.js';
 import { ranks, upsertRank, removeRank, resetRanks } from '../ranks.js';
+import { ticketPanelComponents } from '../tickets.js';
+import { TICKET_TYPES } from '../ticketcore.js';
 
 function parseColor(input) {
   if (!input) return Colors.main;
@@ -132,7 +134,17 @@ export default [
       .addSubcommand((s) => s.setName('ticketkategori')
         .setDescription('Destek talebi kanallarının açılacağı kategoriyi ayarlar')
         .addChannelOption((o) => o.setName('kategori').setDescription('Kategori')
-          .addChannelTypes(ChannelType.GuildCategory).setRequired(true)))
+          .addChannelTypes(ChannelType.GuildCategory).setRequired(true))
+        .addStringOption((o) => o.setName('tür').setDescription('Yalnız bu talep türü için (boş = genel varsayılan)')
+          .addChoices(...Object.entries(TICKET_TYPES).map(([value, t]) => ({ name: t.label, value })))))
+      .addSubcommand((s) => s.setName('destekmodu')
+        .setDescription('Destek (ticket) sistemini açar veya kapatır')
+        .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
+          .addChoices(
+            { name: 'aç', value: 'on' },
+            { name: 'kapat', value: 'off' },
+            { name: 'durum', value: 'status' },
+          ).setRequired(true)))
       .addSubcommand((s) => s.setName('rolpanel')
         .setDescription('Buton ile alınıp bırakılabilen rol paneli gönderir (en fazla 5 rol)')
         .addChannelOption((o) => o.setName('kanal').setDescription('Panel kanalı')
@@ -194,22 +206,46 @@ export default [
 
       if (sub === 'ticketkategori') {
         const category = interaction.options.getChannel('kategori', true);
+        const tur = interaction.options.getString('tür');
+        if (tur) {
+          setSetting(`ticket_category_${tur}`, category.id);
+          return interaction.reply({
+            embeds: [okEmbed(`🎫 **${TICKET_TYPES[tur]?.label ?? tur}** talepleri **${category.name}** kategorisinde açılacak.`)],
+          });
+        }
         setSetting('ticket_category', category.id);
         return interaction.reply({ embeds: [okEmbed(`🎫 Destek talepleri **${category.name}** kategorisinde açılacak.`)] });
+      }
+
+      if (sub === 'destekmodu') {
+        const durum = interaction.options.getString('durum', true);
+        if (durum === 'status') {
+          const on = getSetting('tickets_enabled', '1') === '1';
+          return interaction.reply({
+            embeds: [baseEmbed(on ? Colors.success : Colors.danger)
+              .setTitle('🎫 Destek Sistemi')
+              .setDescription(`Durum: **${on ? 'AÇIK' : 'KAPALI'}**`)],
+            ephemeral: true,
+          });
+        }
+        const enable = durum === 'on';
+        setSetting('tickets_enabled', enable ? '1' : '0');
+        addCase('tickets_toggle', null, interaction.user.id, null, enable ? 'açık' : 'kapalı');
+        return interaction.reply({
+          embeds: [okEmbed(enable
+            ? '🎫 Destek sistemi **açıldı** — panel ve komutlar tekrar kullanılabilir.'
+            : '🎫 Destek sistemi **kapatıldı** — panel etkileşimleri reddedilecek.')],
+        });
       }
 
       if (sub === 'ticketpanel') {
         const channel = interaction.options.getChannel('kanal', true);
         const embed = baseEmbed(Colors.main)
           .setTitle('🎫 Destek Talebi')
-          .setDescription('Bir sorunun mu var? Hesap bağlantısı düzeltmesi, şikayet, itiraz veya '
-            + 'başka bir konu için aşağıdaki butonla **özel bir destek kanalı** aç.\n\n'
+          .setDescription('Bir sorunun mu var? Aşağıdaki menüden **konuya uygun türü seç**, açılan forma '
+            + 'konu ve açıklamanı yaz — sana özel bir destek kanalı açılır.\n\n'
             + 'Talebini yalnızca sen ve yetkililer görebilir.');
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('ticket:open').setLabel('Destek Talebi Aç')
-            .setEmoji('🎫').setStyle(ButtonStyle.Primary),
-        );
-        await channel.send({ embeds: [embed], components: [row] });
+        await channel.send({ embeds: [embed], components: ticketPanelComponents() });
         addCase('ticket_panel', null, interaction.user.id, null, `#${channel.name}`);
         return interaction.reply({ embeds: [okEmbed(`✅ Destek paneli ${channel} kanalına gönderildi.`)], ephemeral: true });
       }

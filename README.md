@@ -69,10 +69,30 @@ kullanır (süreli cezalar desteklenir: `10dk`, `2sa`, `7g`).
   yeniden başlasa bile unban/hatırlatıcı/çekiliş zamanlamaları **kaybolmaz**.
 
 ### Destek talebi (ticket) sistemi
-- `/admin ticketpanel #kanal` — butonlu panel; `/admin ticketkategori` ile kategori.
-- Buton veya `/destek aç` → yalnızca açan kişi + yetkililerin gördüğü özel kanal.
-- `/destek kapat` veya kanal içi buton → kapanışta **transcript** (.txt) log kanalına düşer.
+- `/admin ticketpanel #kanal` — türe göre select-menu paneli (genel, hesap
+  bağlantısı, oyuncu şikâyeti, ceza itirazı, teknik sorun, mağaza/ödeme, diğer).
+- Numaralı talepler; yetkili **claim/unclaim**, öncelik (low/normal/high/urgent),
+  beklet, not ekle, kullanıcı ekle/çıkar, yeniden aç.
+- Kapanışta **tam transcript** (100 mesajla sınırlı değil, tüm mesajlar
+  kalıcı depolanır) log kanalına ve açan kişiye DM'lenir; DM'e 1-5 memnuniyet
+  puanı butonları eklenir.
+- SLA takibi (önceliğe göre ilk yanıt hedefi) ve 48 saat hareketsizlik
+  hatırlatması otomatik çalışır. Kanalı silinen talepler restart'ta
+  otomatik uzlaştırılır (reconciliation).
+- Kara liste: `/destek karaliste ekle|çıkar <kullanıcı>` (Baş Mod+).
+- `/destek listele|bilgi|not|ata|öncelik|ekle|çıkar|yenidenaç` — yetkili yönetim komutları.
 - Hesap bağlantısı düzeltmeleri ("değişiklik için destek talebi aç") bu akıştan yürür.
+
+### Maç bildirim DM aboneliği
+- `/maç-bildirim` — mevcut durumu gösterir, **Aç/Kapat/Vazgeç** butonlarıyla
+  onaylı değişiklik yapılır (yalnız komutu kullanan kişiye çalışır, 2 dk TTL).
+- Normal maç başlangıcında (test maçları HARİÇ) maçlar kanalındaki duyurunun
+  aynısı kişisel DM olarak gelir. DM'i kapalı kullanıcılar diğer aboneleri
+  etkilemez; abonelik restartta kalıcıdır.
+
+### Sağlık kontrolü
+- `/sağlık` (Rehber+) — bot uptime, DB durumu, plugin köprü erişilebilirliği,
+  bekleyen zamanlanmış görev sayısı, açık ticket sayısı, modül aç/kapat durumu.
 
 ### Çekiliş, anket, hatırlatıcı
 - `/çekiliş başlat <süre> <ödül> [kazanan]` — buton katılımlı; `bitir` ve `yenidençek` ile yönetilir.
@@ -135,6 +155,13 @@ bridge:
   token: "BRIDGE_SECRET ile aynı"
   bot-url: "https://bot-domainin"  # Coolify'daki bot adresi
 ```
+
+## Bridge güvenliği (Faz 2)
+
+Köprü artık **HMAC-SHA256** ile imzalanır (`X-Nautilus-Timestamp/Nonce/Signature`),
+±300 sn replay penceresi ve nonce tekrar kontrolüyle. Eski `X-Bridge-Secret`
+başlığı `BRIDGE_ALLOW_LEGACY=1` (varsayılan) iken geçiş modu olarak hâlâ kabul
+edilir. Ayrıntı: [`../docs/INTEGRATION-CONTRACT.md`](../docs/INTEGRATION-CONTRACT.md).
 
 ## Geliştirme
 

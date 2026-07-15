@@ -1,5 +1,32 @@
-import { EmbedBuilder } from 'discord.js';
 import { config } from './config.js';
+
+/*
+ * discord.js üretim bağımlılığıdır; ancak bot testleri npm install olmadan
+ * saf Node ile koşar. Bu yüzden EmbedBuilder yoksa aynı akıcı API'yi ve
+ * `.data` şeklini sunan minimal bir shim kullanılır (yalnız testte devreye
+ * girer; üretimde her zaman gerçek discord.js yüklüdür).
+ */
+let EmbedBuilder;
+try {
+  ({ EmbedBuilder } = await import('discord.js'));
+} catch {
+  EmbedBuilder = class EmbedShim {
+    constructor() { this.data = {}; }
+    setColor(v) { this.data.color = v; return this; }
+    setTitle(v) { this.data.title = v; return this; }
+    setDescription(v) { this.data.description = v; return this; }
+    setThumbnail(url) { this.data.thumbnail = { url }; return this; }
+    setImage(url) { this.data.image = { url }; return this; }
+    setFooter(v) { this.data.footer = v; return this; }
+    setTimestamp(t = new Date()) { this.data.timestamp = t.toISOString?.() ?? t; return this; }
+    setAuthor(v) { this.data.author = v; return this; }
+    setURL(v) { this.data.url = v; return this; }
+    addFields(...fields) {
+      this.data.fields = (this.data.fields ?? []).concat(fields.flat());
+      return this;
+    }
+  };
+}
 
 /** Nautilus PvP palette. */
 export const Colors = {
