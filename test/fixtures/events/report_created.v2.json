@@ -1,0 +1,12 @@
+{
+  "eventId": "7d2f4a5b-8e9c-4d0e-a1f2-3b4c5d6e7f88",
+  "schemaVersion": 2,
+  "type": "report_created",
+  "occurredAt": "2026-07-14T18:41:15Z",
+  "test": false,
+  "data": {
+    "reporter": "KaptanReis",
+    "reported": "Oyuncu2",
+    "reason": "xray şüphesi"
+  }
+}

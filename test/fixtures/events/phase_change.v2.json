@@ -1,0 +1,13 @@
+{
+  "eventId": "3a9c1d2e-4b5f-4a6c-8d7e-9f0a1b2c3d44",
+  "schemaVersion": 2,
+  "type": "phase_change",
+  "occurredAt": "2026-07-14T18:20:03Z",
+  "test": false,
+  "data": {
+    "phase": "pvp",
+    "elapsedSecs": 1200,
+    "aliveCount": 18,
+    "borderSize": 1500
+  }
+}

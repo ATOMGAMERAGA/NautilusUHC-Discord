@@ -213,6 +213,18 @@ const MIGRATIONS = [
     INSERT INTO tickets_v2 (channel_id, user_id, type, status, priority, created_at)
       SELECT channel_id, user_id, 'genel', 'open', 'normal', created_at FROM tickets;`,
   },
+  {
+    version: 4,
+    // W4 moderasyon: kullanıcı başına kalıcı yetkili notları (/not).
+    sql: `CREATE TABLE IF NOT EXISTS user_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      note TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_notes_user ON user_notes(user_id);`,
+  },
 ];
 
 {
@@ -296,6 +308,35 @@ export function addCase(action, userId, modId, reason, detail = null) {
 export function casesOf(userId, limit = 15) {
   return casesOfStmt.all(userId, limit);
 }
+
+/** /sicil sayfalaması: OFFSET'li sayfa + toplam sayı. */
+export function casesOfPage(userId, limit = 10, offset = 0) {
+  return db.prepare(
+    'SELECT id, action, mod_id, reason, detail, created_at FROM cases WHERE user_id = ? '
+    + 'ORDER BY id DESC LIMIT ? OFFSET ?',
+  ).all(userId, limit, offset);
+}
+
+export function caseCount(userId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM cases WHERE user_id = ?').get(userId).n;
+}
+
+/* ------------------------------------------------------------------ */
+/* Kullanıcı notları (W4 — /not)                                       */
+/* ------------------------------------------------------------------ */
+
+export const userNotes = {
+  add: (userId, authorId, note) =>
+    db.prepare('INSERT INTO user_notes (user_id, author_id, note, created_at) VALUES (?, ?, ?, ?)')
+      .run(userId, authorId, note, Date.now()).lastInsertRowid,
+  of: (userId, limit = 25) =>
+    db.prepare('SELECT id, author_id, note, created_at FROM user_notes WHERE user_id = ? '
+      + 'ORDER BY id DESC LIMIT ?').all(userId, limit),
+  remove: (id, userId) =>
+    db.prepare('DELETE FROM user_notes WHERE id = ? AND user_id = ?').run(id, userId).changes > 0,
+  count: (userId) =>
+    db.prepare('SELECT COUNT(*) AS n FROM user_notes WHERE user_id = ?').get(userId).n,
+};
 
 /* ------------------------------------------------------------------ */
 /* Scheduled tasks (persistent — survive restarts)                     */

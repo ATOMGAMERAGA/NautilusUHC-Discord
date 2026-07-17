@@ -68,4 +68,14 @@ export const mcapi = {
   statsPlayer: (query) => request(`/api/stats/player?${query}`),
   statsTop: (by = 'elo', limit = 10) =>
     request(`/api/stats/top?by=${encodeURIComponent(by)}&limit=${limit}`),
+
+  /* Faz 7: genişletilmiş köprü yüzeyi. */
+  capabilities: () => request('/api/capabilities'),
+  teams: () => request('/api/teams'),
+  perf: () => request('/api/server/perf'),
+  scenarios: () => request('/api/scenarios'),
+  queue: () => request('/api/queue'),
+  modHistory: (player) => request(`/api/mod/history?player=${encodeURIComponent(player)}`),
+  modList: (type) => request(`/api/mod/list?type=${encodeURIComponent(type)}`),
+  links: () => request('/api/links'),
 };

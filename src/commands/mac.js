@@ -1,7 +1,10 @@
-import { SlashCommandBuilder } from 'discord.js';
+import {
+  SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+} from 'discord.js';
 import { Tier, hasTier } from '../permissions.js';
 import { errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
 import { mcapi } from '../mcapi.js';
+import { liveMatchEmbed, teamsEmbed, scenariosEmbed, queueEmbed } from '../liveembeds.js';
 import { formatSeconds, trDateTime, discordTime, clean } from '../util.js';
 
 /** "IRON_SWORD" -> "Iron Sword" */
@@ -37,6 +40,25 @@ function renderInventory(items) {
     { name: '🗡️ Hotbar (1-9)', value: section(groups.hotbar), inline: false },
     { name: '🎒 Envanter', value: section(groups.main), inline: false },
   ];
+}
+
+/** `/maç canlı` yenile butonu — components.js 'mac:yenile' handler'ı da kullanır. */
+export function liveComponents() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('mac:yenile').setLabel('Yenile').setEmoji('🔄')
+      .setStyle(ButtonStyle.Secondary),
+  )];
+}
+
+/** Canlı maç embed'ini taze veriyle kurar (komut + yenile butonu ortak yolu). */
+export async function buildLivePayload() {
+  const status = await mcapi.status();
+  const current = status.ok && status.match?.active ? await mcapi.currentMatch() : null;
+  return { embeds: [liveMatchEmbed(status, current)], components: liveComponents() };
+}
+
+async function macCanli(interaction) {
+  return interaction.editReply(await buildLivePayload());
 }
 
 async function macBilgi(interaction) {
@@ -171,6 +193,7 @@ export default [
       .setName('maç')
       .setDescription('Nautilus PvP maç bilgileri')
       .addSubcommand((s) => s.setName('bilgi').setDescription('Aktif maçın durumunu gösterir'))
+      .addSubcommand((s) => s.setName('canlı').setDescription('Canlı maç panosu (yenile butonlu)'))
       .addSubcommand((s) => s.setName('program').setDescription('Bugünkü maç saatlerini gösterir'))
       .addSubcommand((s) => s.setName('geçmiş').setDescription('Son oynanan maçları listeler'))
       .addSubcommand((s) => s.setName('detay').setDescription('Bir maçın tüm detaylarını gösterir')
@@ -182,12 +205,46 @@ export default [
       await interaction.deferReply();
       switch (interaction.options.getSubcommand()) {
         case 'bilgi': return macBilgi(interaction);
+        case 'canlı': return macCanli(interaction);
         case 'program': return macProgram(interaction);
         case 'geçmiş': return macGecmis(interaction);
         case 'detay': return macDetay(interaction);
         case 'envanter': return macEnvanter(interaction);
         default: return interaction.editReply({ embeds: [errEmbed('Bilinmeyen alt komut.')] });
       }
+    },
+  },
+
+  {
+    tier: Tier.MEMBER,
+    data: new SlashCommandBuilder()
+      .setName('takımlar')
+      .setDescription('Aktif maçın takım kadrolarını gösterir'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [teamsEmbed(await mcapi.teams())] });
+    },
+  },
+
+  {
+    tier: Tier.MEMBER,
+    data: new SlashCommandBuilder()
+      .setName('sıra')
+      .setDescription('Maç katılım kuyruğunu gösterir (/maç katıl kayıtları)'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [queueEmbed(await mcapi.queue())] });
+    },
+  },
+
+  {
+    tier: Tier.MEMBER,
+    data: new SlashCommandBuilder()
+      .setName('senaryolar')
+      .setDescription('Tüm UHC senaryolarını ve aktif olanları listeler'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [scenariosEmbed(await mcapi.scenarios())] });
     },
   },
 ];

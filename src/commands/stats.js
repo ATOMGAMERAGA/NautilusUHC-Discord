@@ -1,8 +1,10 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import {
+  SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+} from 'discord.js';
 import { Tier } from '../permissions.js';
 import { errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
 import { mcapi } from '../mcapi.js';
-import { casesOf } from '../db.js';
+import { casesOf, casesOfPage, caseCount } from '../db.js';
 import { rankFor, rankLabel } from '../ranks.js';
 import { clean, discordTime, formatDuration } from '../util.js';
 
@@ -18,6 +20,10 @@ const ACTION_LABELS = {
   purge: '🧹 Mesaj silme', mc_ban: '⛏️ MC Ban', mc_unban: '⛏️ MC Unban', mc_mute: '⛏️ MC Mute',
   mc_unmute: '⛏️ MC Unmute', mc_kick: '⛏️ MC Kick', mc_warn: '⛏️ MC Uyarı',
   link_create: '🔗 Hesap bağlama', link_delete: '🗑️ Bağlantı silme',
+  softban: '🧽 Softban', nick: '✏️ Takma ad', note_add: '📝 Not', note_delete: '🗑️ Not silme',
+  lockdown: '🔒 Lockdown', lockdown_end: '🔓 Lockdown bitişi',
+  warn_auto_timeout: '⏱️ Otomatik timeout (uyarı eşiği)', warn_auto_ban: '🔨 Otomatik ban (uyarı eşiği)',
+  elorank_sync: '🎨 Tier rol senkronu',
 };
 
 function kd(kills, deaths) {
@@ -156,28 +162,51 @@ export default [
     tier: Tier.REHBER,
     data: new SlashCommandBuilder()
       .setName('sicil')
-      .setDescription('Bir kullanıcının bot moderasyon geçmişini gösterir')
+      .setDescription('Bir kullanıcının bot moderasyon geçmişini gösterir (sayfalı)')
       .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
       .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true)),
     async execute(interaction) {
       const user = interaction.options.getUser('kullanıcı', true);
-      const cases = casesOf(user.id, 15);
-      if (!cases.length) {
-        return interaction.reply({
-          embeds: [baseEmbed(Colors.success).setDescription(`${user} için kayıtlı bir işlem yok — sicili temiz. ✅`)],
-          ephemeral: true,
-        });
-      }
-      const lines = cases.map((c) => {
-        const label = ACTION_LABELS[c.action] ?? c.action;
-        const extra = [c.reason, c.detail].filter(Boolean).map((t) => clean(t, 60)).join(' • ');
-        return `**#${c.id}** ${label} — ${discordTime(c.created_at, 'd')}${c.mod_id ? ` — <@${c.mod_id}>` : ''}`
-          + (extra ? `\n└ ${extra}` : '');
-      });
-      const embed = baseEmbed(Colors.warn)
-        .setTitle(`📋 Sicil — ${user.tag} (son ${cases.length} işlem)`)
-        .setDescription(lines.join('\n').slice(0, 3900));
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      const payload = sicilPayload(user.id, user.tag, 0);
+      return interaction.reply({ ...payload, ephemeral: true });
     },
   },
 ];
+
+/* ------------------------------------------------------------------ */
+/* /sicil sayfalaması — components.js 'sicil' handler'ı da kullanır    */
+/* ------------------------------------------------------------------ */
+
+const SICIL_PAGE_SIZE = 10;
+
+/** Sayfalı sicil embed'i + gezinme butonları. page 0 tabanlıdır. */
+export function sicilPayload(userId, userTag, page) {
+  const total = caseCount(userId);
+  if (!total) {
+    return {
+      embeds: [baseEmbed(Colors.success)
+        .setDescription(`<@${userId}> için kayıtlı bir işlem yok — sicili temiz. ✅`)],
+      components: [],
+    };
+  }
+  const pages = Math.max(1, Math.ceil(total / SICIL_PAGE_SIZE));
+  const safePage = Math.min(Math.max(0, page), pages - 1);
+  const cases = casesOfPage(userId, SICIL_PAGE_SIZE, safePage * SICIL_PAGE_SIZE);
+  const lines = cases.map((c) => {
+    const label = ACTION_LABELS[c.action] ?? c.action;
+    const extra = [c.reason, c.detail].filter(Boolean).map((t) => clean(t, 60)).join(' • ');
+    return `**#${c.id}** ${label} — ${discordTime(c.created_at, 'd')}${c.mod_id ? ` — <@${c.mod_id}>` : ''}`
+      + (extra ? `\n└ ${extra}` : '');
+  });
+  const embed = baseEmbed(Colors.warn)
+    .setTitle(`📋 Sicil — ${clean(userTag ?? userId, 40)}`)
+    .setDescription(lines.join('\n').slice(0, 3900))
+    .setFooter({ text: `Sayfa ${safePage + 1}/${pages} — toplam ${total} kayıt • Nautilus PvP` });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage - 1}`).setLabel('◀ Önceki')
+      .setStyle(ButtonStyle.Secondary).setDisabled(safePage === 0),
+    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage + 1}`).setLabel('Sonraki ▶')
+      .setStyle(ButtonStyle.Secondary).setDisabled(safePage >= pages - 1),
+  );
+  return { embeds: [embed], components: pages > 1 ? [row] : [] };
+}

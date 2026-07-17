@@ -1,0 +1,15 @@
+{
+  "eventId": "9e4a6b7c-0d1f-4e2a-b3c4-5d6e7f8a9b00",
+  "schemaVersion": 2,
+  "type": "punishment",
+  "occurredAt": "2026-07-14T18:45:30Z",
+  "test": false,
+  "data": {
+    "action": "ban",
+    "player": "Oyuncu2",
+    "staff": "AtomGamer",
+    "reason": "xray",
+    "durationMs": 86400000,
+    "source": "game"
+  }
+}

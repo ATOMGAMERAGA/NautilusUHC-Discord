@@ -1,7 +1,11 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
-import { Tier, tierOf, outranks } from '../permissions.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { Tier, tierOf, outranks, hasTier } from '../permissions.js';
 import { okEmbed, errEmbed, baseEmbed, Colors } from '../embeds.js';
-import { addWarn, warnsOf, deleteWarn, clearWarns, addCase, scheduleTask, cancelTasks } from '../db.js';
+import {
+  addWarn, warnsOf, deleteWarn, clearWarns, addCase, scheduleTask, cancelTasks,
+  userNotes, getSetting, setSetting,
+} from '../db.js';
+import { escalationConfig, escalationAction } from '../escalation.js';
 import { parseDuration, formatDuration, clean, discordTime } from '../util.js';
 import { sendLog } from '../modlog.js';
 
@@ -225,7 +229,27 @@ export default [
         title: '⚠️ Uyarı', color: Colors.warn, target: user, reason,
         extra: [{ name: 'Toplam', value: String(total), inline: true }],
       });
-      return interaction.reply({ embeds: [okEmbed(`⚠️ ${user} uyarıldı (toplam **${total}**).\n**Sebep:** ${clean(reason)}`)] });
+
+      // Uyarı eskalasyonu (/admin uyarıeşiği): eşik aşıldıysa otomatik yaptırım.
+      let escalated = '';
+      const action = escalationAction(total, escalationConfig());
+      if (action?.type === 'timeout' && member?.moderatable) {
+        const ms = Math.min(action.ms, MAX_TIMEOUT_MS);
+        await member.timeout(ms, `Otomatik: ${total} uyarı eşiği`);
+        addCase('warn_auto_timeout', user.id, interaction.client.user.id,
+          `${total} uyarı`, formatDuration(ms));
+        escalated = `\n⏱️ **Otomatik yaptırım:** ${total} uyarı eşiği aşıldı — `
+          + `**${formatDuration(ms)}** susturuldu.`;
+      } else if (action?.type === 'ban' && (!member || member.bannable)) {
+        await notify(user, `**Nautilus PvP** — ${total} uyarıya ulaştığın için sunucudan yasaklandın.`);
+        await interaction.guild.members.ban(user.id, { reason: `Otomatik: ${total} uyarı eşiği` });
+        addCase('warn_auto_ban', user.id, interaction.client.user.id, `${total} uyarı`);
+        escalated = `\n🔨 **Otomatik yaptırım:** ${total} uyarı eşiği aşıldı — kullanıcı yasaklandı.`;
+      }
+
+      return interaction.reply({
+        embeds: [okEmbed(`⚠️ ${user} uyarıldı (toplam **${total}**).\n**Sebep:** ${clean(reason)}${escalated}`)],
+      });
     },
   },
 
@@ -281,13 +305,19 @@ export default [
       .setDescription('Kanaldan mesaj siler')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addIntegerOption((o) => o.setName('adet').setDescription('Silinecek mesaj sayısı (1-100)').setMinValue(1).setMaxValue(100).setRequired(true))
-      .addUserOption((o) => o.setName('kullanıcı').setDescription('Sadece bu kullanıcının mesajları')),
+      .addUserOption((o) => o.setName('kullanıcı').setDescription('Sadece bu kullanıcının mesajları'))
+      .addBooleanOption((o) => o.setName('bot').setDescription('Sadece bot mesajları'))
+      .addStringOption((o) => o.setName('içerik').setDescription('Sadece bu metni içeren mesajlar')),
     async execute(interaction) {
       const amount = interaction.options.getInteger('adet', true);
       const user = interaction.options.getUser('kullanıcı');
+      const onlyBots = interaction.options.getBoolean('bot') ?? false;
+      const needle = interaction.options.getString('içerik')?.toLowerCase();
       await interaction.deferReply({ ephemeral: true });
       let messages = await interaction.channel.messages.fetch({ limit: 100 });
       if (user) messages = messages.filter((m) => m.author.id === user.id);
+      if (onlyBots) messages = messages.filter((m) => m.author.bot);
+      if (needle) messages = messages.filter((m) => m.content?.toLowerCase().includes(needle));
       const targets = [...messages.values()].slice(0, amount);
       const deleted = await interaction.channel.bulkDelete(targets, true);
       addCase('purge', user?.id ?? null, interaction.user.id, null, `${deleted.size} mesaj / #${interaction.channel.name}`);
@@ -390,6 +420,189 @@ export default [
       addCase('role_remove', user.id, interaction.user.id, role.name);
       await logAction(interaction, { title: '➖ Rol Alındı', color: Colors.info, target: user, reason: role.name });
       return interaction.reply({ embeds: [okEmbed(`➖ ${user} kullanıcısından ${role} rolü alındı.`)] });
+    },
+  },
+
+  {
+    tier: Tier.BMOD,
+    data: new SlashCommandBuilder()
+      .setName('softban')
+      .setDescription('Kullanıcıyı yasaklayıp hemen kaldırır (mesajlarını temizlemek için)')
+      .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
+      .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true))
+      .addStringOption((o) => o.setName('sebep').setDescription('Sebep'))
+      .addIntegerOption((o) => o.setName('gün')
+        .setDescription('Son kaç günün mesajları silinsin (1-7, varsayılan 1)').setMinValue(1).setMaxValue(7)),
+    async execute(interaction) {
+      const user = interaction.options.getUser('kullanıcı', true);
+      const reason = interaction.options.getString('sebep') ?? 'Sebep belirtilmedi';
+      const days = interaction.options.getInteger('gün') ?? 1;
+      const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+      const err = punishGuard(interaction, member);
+      if (err) return interaction.reply({ embeds: [errEmbed(err)], ephemeral: true });
+      if (member && !member.bannable) {
+        return interaction.reply({ embeds: [errEmbed('Bu kullanıcıya softban uygulayamıyorum (rol sıralaması).')], ephemeral: true });
+      }
+      await notify(user, `**Nautilus PvP** sunucusundan mesaj temizliği için atıldın (softban).\nSebep: ${reason}\nTekrar katılabilirsin.`);
+      await interaction.guild.members.ban(user.id, {
+        reason: `Softban ${interaction.user.tag}: ${reason}`,
+        deleteMessageSeconds: days * 86_400,
+      });
+      await interaction.guild.members.unban(user.id, `Softban ${interaction.user.tag}`);
+      addCase('softban', user.id, interaction.user.id, reason, `${days} gün mesaj temizliği`);
+      await logAction(interaction, {
+        title: '🧽 Softban', color: Colors.warn, target: user, reason,
+        extra: [{ name: 'Mesaj temizliği', value: `${days} gün`, inline: true }],
+      });
+      return interaction.reply({
+        embeds: [okEmbed(`🧽 ${user} softban'landı — son **${days}** günün mesajları silindi, kullanıcı tekrar katılabilir.\n**Sebep:** ${clean(reason)}`)],
+      });
+    },
+  },
+
+  {
+    tier: Tier.MOD,
+    data: new SlashCommandBuilder()
+      .setName('nick')
+      .setDescription('Bir kullanıcının takma adını değiştirir veya sıfırlar')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
+      .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true))
+      .addStringOption((o) => o.setName('isim').setDescription('Yeni takma ad (boş bırak = sıfırla)').setMaxLength(32)),
+    async execute(interaction) {
+      const user = interaction.options.getUser('kullanıcı', true);
+      const nick = interaction.options.getString('isim')?.trim() || null;
+      const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+      if (!member) return interaction.reply({ embeds: [errEmbed('Kullanıcı sunucuda değil.')], ephemeral: true });
+      const err = punishGuard(interaction, member, { needBot: false });
+      if (err) return interaction.reply({ embeds: [errEmbed(err)], ephemeral: true });
+      if (!member.manageable) {
+        return interaction.reply({ embeds: [errEmbed('Bu kullanıcının takma adını değiştiremiyorum (rol sıralaması).')], ephemeral: true });
+      }
+      await member.setNickname(nick, `${interaction.user.tag}`);
+      addCase('nick', user.id, interaction.user.id, null, nick ?? 'sıfırlandı');
+      return interaction.reply({
+        embeds: [okEmbed(nick
+          ? `✏️ ${user} kullanıcısının takma adı **${clean(nick, 32)}** yapıldı.`
+          : `✏️ ${user} kullanıcısının takma adı sıfırlandı.`)],
+      });
+    },
+  },
+
+  {
+    tier: Tier.MOD,
+    data: new SlashCommandBuilder()
+      .setName('not')
+      .setDescription('Kullanıcı hakkında yetkili notları (yalnız yetkililer görür)')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+      .addSubcommand((s) => s.setName('ekle').setDescription('Kullanıcıya not ekler')
+        .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true))
+        .addStringOption((o) => o.setName('not').setDescription('Not metni').setRequired(true).setMaxLength(500)))
+      .addSubcommand((s) => s.setName('liste').setDescription('Kullanıcının notlarını listeler')
+        .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true)))
+      .addSubcommand((s) => s.setName('sil').setDescription('Bir notu siler (BMod+)')
+        .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true))
+        .addIntegerOption((o) => o.setName('not-no').setDescription('Silinecek not numarası').setRequired(true))),
+    async execute(interaction) {
+      const sub = interaction.options.getSubcommand();
+      const user = interaction.options.getUser('kullanıcı', true);
+      if (sub === 'ekle') {
+        const note = interaction.options.getString('not', true);
+        const id = userNotes.add(user.id, interaction.user.id, note);
+        addCase('note_add', user.id, interaction.user.id, null, `#${id}`);
+        return interaction.reply({
+          embeds: [okEmbed(`📝 ${user} için **#${id}** numaralı not eklendi.`)], ephemeral: true,
+        });
+      }
+      if (sub === 'sil') {
+        if (!hasTier(interaction.member, Tier.BMOD)) {
+          return interaction.reply({ embeds: [errEmbed('Not silmek için en az **BMod** yetkisi gerekir.')], ephemeral: true });
+        }
+        const id = interaction.options.getInteger('not-no', true);
+        if (!userNotes.remove(id, user.id)) {
+          return interaction.reply({ embeds: [errEmbed(`#${id} numaralı not bu kullanıcıda bulunamadı.`)], ephemeral: true });
+        }
+        addCase('note_delete', user.id, interaction.user.id, null, `#${id}`);
+        return interaction.reply({ embeds: [okEmbed(`🗑️ **#${id}** numaralı not silindi.`)], ephemeral: true });
+      }
+      // liste
+      const notes = userNotes.of(user.id);
+      if (!notes.length) {
+        return interaction.reply({ embeds: [okEmbed(`${user} için kayıtlı not yok.`)], ephemeral: true });
+      }
+      const embed = baseEmbed(Colors.info)
+        .setTitle(`📝 Notlar — ${user.tag} (${userNotes.count(user.id)})`)
+        .setDescription(notes.map((n) =>
+          `**#${n.id}** • ${discordTime(n.created_at, 'd')} • <@${n.author_id}>\n${clean(n.note, 200)}`)
+          .join('\n\n').slice(0, 3900));
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    },
+  },
+
+  {
+    tier: Tier.BMOD,
+    data: new SlashCommandBuilder()
+      .setName('lockdown')
+      .setDescription('Tüm metin kanallarını kilitler/açar (acil durum)')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+      .addSubcommand((s) => s.setName('başlat').setDescription('Tüm metin kanallarını yazıma kapatır')
+        .addStringOption((o) => o.setName('sebep').setDescription('Sebep').setRequired(true)))
+      .addSubcommand((s) => s.setName('bitir').setDescription('Lockdown\'ı kaldırır (yalnız kilitlenenleri açar)')),
+    async execute(interaction) {
+      const sub = interaction.options.getSubcommand();
+      await interaction.deferReply({ ephemeral: true });
+      const everyone = interaction.guild.roles.everyone;
+
+      if (sub === 'başlat') {
+        const reason = interaction.options.getString('sebep', true);
+        const already = JSON.parse(getSetting('lockdown_channels', '[]') || '[]');
+        if (already.length) {
+          return interaction.editReply({ embeds: [errEmbed('Zaten aktif bir lockdown var. Önce `/lockdown bitir` kullan.')] });
+        }
+        const locked = [];
+        for (const channel of interaction.guild.channels.cache.values()) {
+          if (channel.type !== ChannelType.GuildText) continue;
+          // Zaten @everyone'a kapalı kanallara dokunma — bitir'de yanlışlıkla açılmasınlar.
+          const ow = channel.permissionOverwrites.cache.get(everyone.id);
+          if (ow?.deny.has(PermissionFlagsBits.SendMessages)) continue;
+          try {
+            await channel.permissionOverwrites.edit(everyone, { SendMessages: false },
+              { reason: `Lockdown: ${reason}` });
+            locked.push(channel.id);
+          } catch { /* tek kanal hatası tüm lockdown'ı durdurmasın */ }
+        }
+        setSetting('lockdown_channels', JSON.stringify(locked));
+        addCase('lockdown', null, interaction.user.id, reason, `${locked.length} kanal`);
+        await sendLog(interaction.client, {
+          title: '🔒 LOCKDOWN BAŞLATILDI', color: Colors.danger,
+          description: `${interaction.user} — **${locked.length}** kanal kilitlendi.\n**Sebep:** ${clean(reason)}`,
+        });
+        return interaction.editReply({
+          embeds: [okEmbed(`🔒 Lockdown aktif — **${locked.length}** metin kanalı kilitlendi.\n**Sebep:** ${clean(reason)}`)],
+        });
+      }
+
+      // bitir
+      const locked = JSON.parse(getSetting('lockdown_channels', '[]') || '[]');
+      if (!locked.length) {
+        return interaction.editReply({ embeds: [errEmbed('Aktif bir lockdown yok.')] });
+      }
+      let opened = 0;
+      for (const id of locked) {
+        const channel = interaction.guild.channels.cache.get(id);
+        if (!channel) continue;
+        try {
+          await channel.permissionOverwrites.edit(everyone, { SendMessages: null },
+            { reason: 'Lockdown bitti' });
+          opened++;
+        } catch { /* kanal silinmiş olabilir */ }
+      }
+      setSetting('lockdown_channels', '[]');
+      addCase('lockdown_end', null, interaction.user.id, null, `${opened} kanal`);
+      await sendLog(interaction.client, {
+        title: '🔓 Lockdown Bitti', color: Colors.success,
+        description: `${interaction.user} — **${opened}** kanal yeniden açıldı.`,
+      });
+      return interaction.editReply({ embeds: [okEmbed(`🔓 Lockdown kaldırıldı — **${opened}** kanal yeniden açıldı.`)] });
     },
   },
 ];

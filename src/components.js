@@ -9,6 +9,8 @@ import { clean } from './util.js';
 import { sendLog } from './modlog.js';
 import { Colors } from './embeds.js';
 import { ticketComponents } from './tickets.js';
+import { buildLivePayload } from './commands/mac.js';
+import { syncMemberTierRole, roleMap } from './rolesync.js';
 
 /**
  * Component (button / modal) handlers, keyed by customId prefix. The link flow:
@@ -60,10 +62,39 @@ export const componentHandlers = {
       color: Colors.success,
       description: `${interaction.user} ↔ \`${clean(res.mc, 30)}\``,
     });
+    // ELO tier rolünü hemen ver (best-effort; rol eşlemesi kuruluysa).
+    if (interaction.guild && Object.keys(roleMap()).length) {
+      try {
+        const profile = await mcapi.statsPlayer(`name=${encodeURIComponent(res.mc)}`);
+        if (profile.ok && profile.found && profile.tier) {
+          await syncMemberTierRole(interaction.guild, interaction.user.id, profile.tier);
+        }
+      } catch { /* rol senkronu link akışını asla bozmaz */ }
+    }
     return interaction.editReply({
       embeds: [okEmbed(`✅ Hesabın **${clean(res.mc, 30)}** Minecraft hesabına bağlandı!\n`
         + 'Artık maçlara katılabilirsin. İyi oyunlar! 🌊')],
     });
+  },
+
+  /* ---------------- /maç canlı yenile butonu ---------------- */
+
+  'mac:yenile': async (interaction) => {
+    // Önce deferUpdate: buildLivePayload iki köprü isteği yapabilir (sunucu
+    // yavaş/kapalıysa 8sn'e kadar) — 3sn'lik interaction token'ı dolmadan
+    // mesajı sahiplen, sonra editReply ile tazele (tek acknowledge).
+    await interaction.deferUpdate();
+    return interaction.editReply(await buildLivePayload());
+  },
+
+  /* ---------------- /sicil sayfa gezinme ---------------- */
+
+  'sicil': async (interaction) => {
+    const [, userId, rawPage] = interaction.customId.split(':');
+    const page = Number.parseInt(rawPage, 10) || 0;
+    const { sicilPayload } = await import('./commands/stats.js');
+    const user = await interaction.client.users.fetch(userId).catch(() => null);
+    return interaction.update(sicilPayload(userId, user?.tag ?? userId, page));
   },
 
   /* ---------------- /maç-bildirim onay akışı ---------------- */

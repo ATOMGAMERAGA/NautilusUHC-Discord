@@ -8,6 +8,7 @@ import { resolveComponent } from './components.js';
 import { registerGuard } from './security/guard.js';
 import { registerAutomod } from './security/automod.js';
 import { registerMessageLog } from './security/msglog.js';
+import { registerRaidProtection } from './security/raid.js';
 import { registerWelcome } from './welcome.js';
 import { startHttpServer } from './httpserver.js';
 import { startScheduler } from './scheduler.js';
@@ -24,6 +25,8 @@ import destek from './commands/destek.js';
 import bildirim from './commands/bildirim.js';
 import saglik from './commands/saglik.js';
 import { dispatchMatchDms } from './matchdm.js';
+import { handleTierChangeEvent } from './rolesync.js';
+import { startStatusBoard } from './statusboard.js';
 import { registerTicketMessages, startTicketWatcher } from './tickets.js';
 
 const allCommands = [
@@ -76,13 +79,9 @@ client.once(Events.ClientReady, async () => {
     activities: [{ name: 'nautilusuhc.com', type: ActivityType.Playing }],
     status: 'online',
   });
-  // Presence bazen düşer; periyodik tazele.
-  setInterval(() => {
-    client.user.setPresence({
-      activities: [{ name: 'nautilusuhc.com', type: ActivityType.Playing }],
-      status: 'online',
-    });
-  }, 30 * 60_000).unref();
+  // Canlı presence + durum panosu artık statusboard.js'in 60 sn tick'inde:
+  // maç varsa "⚔️ alive/participants — faz", yoksa oyuncu sayısı; 30 dk'da
+  // bir zorla tazelenir (presence düşmesine karşı).
 
   await enforceGuildLock();
 
@@ -98,10 +97,22 @@ client.once(Events.ClientReady, async () => {
     console.error('[bot] Komut kaydı başarısız:', err);
   }
 
-  // Kanal duyurusu başarıyla gönderilen her event, /maç-bildirim DM
-  // dağıtımına da akar (yalnız match_start && !test gönderir; bkz. matchdm.js).
-  startHttpServer(client, { onEvent: (envelope) => dispatchMatchDms(client, envelope) });
+  // Event hook'ları: DM dağıtımı (match_start) + ELO tier rol senkronu
+  // (tier_change). Hook'lar kanal yönlendirmesinden bağımsız her event'te
+  // koşar; biri hata verse diğeri etkilenmez.
+  startHttpServer(client, {
+    onEvent: async (envelope) => {
+      try { await dispatchMatchDms(client, envelope); } catch (err) {
+        console.error('[bot] DM dağıtım hatası:', err.message);
+      }
+      try { await handleTierChangeEvent(client, envelope); } catch (err) {
+        console.error('[bot] rol senkron hatası:', err.message);
+      }
+    },
+  });
   startScheduler(client);
+  // Durum panosu + canlı presence (60 sn tick).
+  startStatusBoard(client);
   // Destek sistemi: kanalı silinmiş talepleri kapat + SLA/hareketsizlik gözcüsü.
   startTicketWatcher(client);
 });
@@ -152,6 +163,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 registerGuard(client);
 registerAutomod(client);
 registerMessageLog(client);
+registerRaidProtection(client);
 registerWelcome(client);
 registerTicketMessages(client); // destek kanallarındaki her mesaj tam transcript'e yazılır
 

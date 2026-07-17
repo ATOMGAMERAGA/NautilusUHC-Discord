@@ -25,7 +25,37 @@ import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
  */
 
 const SCHEMA_VERSIONS = [1, 2];
-const EVENT_TYPES = ['match_scheduled', 'match_start', 'match_end', 'match_cancelled', 'message', 'host_message'];
+const EVENT_TYPES = [
+  'match_scheduled', 'match_start', 'match_end', 'match_cancelled', 'message', 'host_message',
+  'phase_change', 'tier_change', 'report_created', 'punishment', 'link_removed',
+];
+
+/*
+ * Yeni (Faz 7) event tiplerinin kanal yönlendirmesi. Eski 6 tip her zaman maç
+ * kanalına gider (data.channelId ?? config.matchChannelId). Yeni tipler:
+ *  - setting: settings tablosundaki kanal anahtarı (/admin ... ile ayarlanır)
+ *  - fallbackMatch: ayar boşsa maç kanalına düş; yoksa event YÖNLENDİRİLMEZ
+ *    (200 {routed:false} — eventId claim edilir, retry fırtınası olmaz)
+ *  - suppressDiscordSource: data.source === 'discord' ise duyuru BASTIRILIR;
+ *    botun kendi /mc* komutu zaten modlog'a yazdı (çifte duyuru önlenir)
+ */
+export const EVENT_ROUTES = {
+  phase_change: { fallbackMatch: true },
+  tier_change: { setting: 'rank_channel', fallbackMatch: true },
+  report_created: { setting: 'staff_channel' },
+  punishment: { setting: 'staff_channel', suppressDiscordSource: true },
+  link_removed: { setting: 'staff_channel', suppressDiscordSource: true },
+};
+
+/** Eventin gideceği kanal id'si; null = yönlendirme yok (bastırıldı/ayarsız). */
+export function resolveEventChannel(type, data = {}) {
+  const route = EVENT_ROUTES[type];
+  if (!route) return data.channelId ?? config.matchChannelId; // eski 6 tip
+  if (route.suppressDiscordSource && data.source === 'discord') return null;
+  const fromSetting = route.setting ? getSetting(route.setting, '') : '';
+  if (fromSetting) return fromSetting;
+  return route.fallbackMatch ? config.matchChannelId : null;
+}
 
 function safeEqual(a, b) {
   const ba = Buffer.from(String(a));
@@ -166,6 +196,84 @@ function eventEmbed(type, data, test) {
         .setDescription(clean(data.message ?? '', 3900))
         .addFields({ name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true });
 
+    // Faz değişimi — plugin yalnız pvp/border_shrink/deathmatch geçişlerini yollar
+    // (start/end zaten match_start/match_end tarafından duyurulur).
+    case 'phase_change': {
+      const PHASES = {
+        pvp: { title: '⚔️ PvP Açıldı!', color: Colors.danger },
+        border_shrink: { title: '🧱 Border Daralmaya Başladı', color: Colors.warn },
+        deathmatch: { title: '☠️ Deathmatch Zamanı!', color: Colors.danger },
+      };
+      const p = PHASES[data.phase]
+        ?? { title: `📢 Faz: ${clean(String(data.phase ?? '?'), 30)}`, color: Colors.info };
+      const e = baseEmbed(test ? Colors.warn : p.color)
+        .setTitle(`${test ? '🧪 TEST — ' : ''}${p.title}`)
+        .setThumbnail(Assets.item.ironSword)
+        .addFields(
+          { name: '⏱️ Geçen Süre', value: formatSeconds(data.elapsedSecs ?? 0), inline: true },
+          { name: '❤️ Hayatta', value: String(data.aliveCount ?? '?'), inline: true },
+        );
+      if (data.borderSize != null) {
+        e.addFields({ name: '🧱 Border', value: `±${data.borderSize}`, inline: true });
+      }
+      return e;
+    }
+
+    // ELO küme (tier) değişimi — kutlama/uyarı duyurusu.
+    case 'tier_change': {
+      const up = data.direction !== 'demote';
+      return baseEmbed(test ? Colors.warn : (up ? Colors.success : Colors.warn))
+        .setTitle(`${test ? '🧪 TEST — ' : ''}${up ? '📈 Küme Atladı!' : '📉 Küme Düştü'}`)
+        .setThumbnail(Assets.item.diamond)
+        .setDescription(
+          `**${clean(data.player ?? '?', 30)}** — ${clean(data.oldTier ?? '?', 20)} → `
+          + `**${clean(data.newTier ?? '?', 20)}** (${data.elo ?? '?'} ELO)`,
+        );
+    }
+
+    // Oyun içi /report — staff kanalına düşer.
+    case 'report_created':
+      return baseEmbed(Colors.danger)
+        .setTitle(`${test ? '🧪 TEST — ' : ''}🚨 Oyuncu Raporu`)
+        .setThumbnail(Assets.block.cobweb)
+        .addFields(
+          { name: '📣 Raporlayan', value: clean(data.reporter ?? '?', 30), inline: true },
+          { name: '🎯 Raporlanan', value: clean(data.reported ?? '?', 30), inline: true },
+          { name: '📝 Sebep', value: clean(data.reason || '—', 500), inline: false },
+        );
+
+    // MC tarafı moderasyon aynası (source=discord olanlar routing'de bastırılır).
+    case 'punishment': {
+      const LABELS = {
+        ban: 'Ban', unban: 'Ban Kaldırıldı', mute: 'Susturma',
+        unmute: 'Susturma Kaldırıldı', kick: 'Sunucudan Atıldı', warn: 'Uyarı',
+      };
+      const label = LABELS[data.action] ?? clean(String(data.action ?? '?'), 20);
+      const e = baseEmbed(Colors.warn)
+        .setTitle(`${test ? '🧪 TEST — ' : ''}🔨 MC Ceza — ${label}`)
+        .addFields(
+          { name: '👤 Oyuncu', value: clean(data.player ?? '?', 30), inline: true },
+          { name: '🛡️ Yetkili', value: clean(data.staff ?? '?', 30), inline: true },
+        );
+      if (data.action === 'ban' || data.action === 'mute') {
+        e.addFields({
+          name: '⏱️ Süre',
+          value: data.durationMs ? formatSeconds(Math.round(data.durationMs / 1000)) : 'Kalıcı',
+          inline: true,
+        });
+      }
+      e.addFields({ name: '📝 Sebep', value: clean(data.reason || '—', 500), inline: false });
+      return e;
+    }
+
+    // MC↔DC bağlantısı kaldırıldı (source=discord olanlar routing'de bastırılır).
+    case 'link_removed':
+      return baseEmbed(Colors.info)
+        .setTitle(`${test ? '🧪 TEST — ' : ''}🔗 Hesap Bağlantısı Kaldırıldı`)
+        .setDescription(
+          `**${clean(data.mc ?? '?', 30)}** ↔ <@${data.discordId ?? '?'}> bağlantısı oyun tarafından kaldırıldı.`,
+        );
+
     default:
       return null;
   }
@@ -274,8 +382,31 @@ export function createRequestHandler(client, hooks = {}) {
         return respond(200, { ok: true, duplicate: true, correlationId });
       }
 
+      // Hook, event KABUL EDİLDİĞİNDE bir kez koşar: hem başarılı kanal
+      // gönderiminden sonra, hem de kanalsız/bastırılmış (routed:false) yolda —
+      // böylece rol senkronu kanal ayarlanmamışken de işler. Hatası event
+      // işlemesini bozmaz. NOT: Kanal fetch'i başarısız olursa (502) eventId
+      // BIRAKILIR ve hook koşmaz; DM dağıtımı (dispatchMatchDms) idempotent
+      // olmadığından hook'u burada koşturmak retry'da çift DM üretirdi. Kanal
+      // gerektirmeyen rol senkronu ise retry'da veya link doğrulama/senkron
+      // komutu yollarından uygulanır.
+      const runHook = async () => {
+        try {
+          await hooks.onEvent?.({ type, test, data, eventId, schemaVersion });
+        } catch (hookErr) {
+          console.error(`[bridge] onEvent hook hatası (${correlationId}):`, hookErr.message);
+        }
+      };
+
+      // ---- Yönlendirme: kanal yoksa/bastırıldıysa mesajsız kabul et ----
+      const channelId = resolveEventChannel(type, data);
+      if (!channelId) {
+        console.log(`[bridge] olay yönlendirilmedi (kanal ayarsız/bastırıldı): ${type} (${correlationId})`);
+        await runHook();
+        return respond(200, { ok: true, routed: false, correlationId });
+      }
+
       try {
-        const channelId = data.channelId ?? config.matchChannelId;
         const channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased()) {
           if (eventId) processedEvents.release(eventId); // retry edilebilsin
@@ -283,13 +414,8 @@ export function createRequestHandler(client, hooks = {}) {
         }
         await channel.send(embedPayload);
         console.log(`[bridge] olay işlendi: ${type}${test ? ' (test)' : ''} (${correlationId})`);
-        // Kanal duyurusu sonrası hook (ör. Faz 4 DM dağıtımı). Hook hatası
-        // event işlemesini geriye döndürmez; ayrıca loglanır.
-        try {
-          await hooks.onEvent?.({ type, test, data, eventId, schemaVersion });
-        } catch (hookErr) {
-          console.error(`[bridge] onEvent hook hatası (${correlationId}):`, hookErr.message);
-        }
+        // Kanal duyurusu sonrası hook (ör. Faz 4 DM dağıtımı, rol senkronu).
+        await runHook();
         return respond(200, { ok: true, correlationId });
       } catch (err) {
         if (eventId) processedEvents.release(eventId);

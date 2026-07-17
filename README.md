@@ -12,17 +12,31 @@ yönlü entegrasyon** içerir.
 
 ### Discord moderasyonu
 `/ban` `/unban` `/kick` `/mute` `/unmute` `/uyar` `/uyarılar` `/uyarısil`
-`/sil` (toplu mesaj silme) `/kilit` `/yavaşmod` `/rolver` `/rolal`
+`/softban` `/nick` `/not ekle|liste|sil` `/lockdown başlat|bitir`
+`/sil [kullanıcı] [bot] [içerik]` `/kilit` `/yavaşmod` `/rolver` `/rolal`
 
 - Tüm cezalar SQLite'ta kayıt altına alınır (case sistemi) ve log kanalına düşer.
 - Yetki kademeleri rollere bağlıdır: **Kurucu > Admin > Baş Mod > Mod > Rehber**.
   Kurucu her şeye erişir; kimse kendisiyle aynı/üst kademedeki birine işlem yapamaz.
+- **`/softban`** — yasaklayıp anında kaldırır (son N günün mesajlarını temizler).
+- **`/nick`** — takma ad değiştirir/sıfırlar. **`/not`** — kullanıcı hakkında
+  yalnız yetkililerin gördüğü kalıcı notlar. **`/lockdown`** — acil durumda tüm
+  metin kanallarını tek komutla kilitler/açar (yalnız kendi kilitlediklerini geri açar).
+- **Uyarı eskalasyonu:** `/admin uyarıeşiği` ile N uyarıda otomatik timeout,
+  M uyarıda otomatik ban ayarlanabilir; `/uyar` eşiği aşınca yaptırımı kendisi uygular.
+- **Raid koruması:** `/admin raidkoruma` — katılım-hızı alarmı + minimum hesap
+  yaşı kapısı (kick veya yalnız log).
+- **`/sicil`** artık sayfalıdır (◀/▶ butonları, sayfa başı 10 kayıt).
 
 ### Minecraft moderasyonu (Discord'dan)
 `/mcban` `/mcunban` `/mcmute` `/mcunmute` `/mckick` `/mcuyar` `/mconline` `/mcdurum`
+`/sunucuperf` `/mcsicil <oyuncu>` `/mcbanlist` `/mcmutelist`
 
 Bu komutlar plugin köprü API'sine gider; oyun içi ban/mute sistemiyle aynı kayıtları
-kullanır (süreli cezalar desteklenir: `10dk`, `2sa`, `7g`).
+kullanır (süreli cezalar desteklenir: `10dk`, `2sa`, `7g`). `/mcsicil` oyuncunun
+kalıcı ceza geçmişini, `/mcbanlist`/`/mcmutelist` aktif cezaları, `/sunucuperf`
+TPS/MSPT/bellek/uptime'ı gösterir. Oyun içi ceza/rapor/faz olayları köprü
+üzerinden bota gelir (`staff_channel`/`rank_channel` ile yönlendirilir).
 
 ### Maç sistemi
 - Host oyun içinden maç planlayınca/başlatınca bot **maç kanalına** ayarları içeren
@@ -61,7 +75,24 @@ kullanır (süreli cezalar desteklenir: `10dk`, `2sa`, `7g`).
 - **Ayarlanabilir rank kademeleri:** `/admin elorank liste|ekle|sil|sıfırla` —
   varsayılan merdiven (plugin EloTier ile birebir): 🟤 Bakır → ⚙️ Demir (1200)
   → 🥇 Altın (1400) → 🟢 Zümrüt (1600) → 💎 Elmas (1800) → ⬛ Netherite (2000).
-- `/sicil @kullanıcı` — botun uyguladığı tüm işlemlerin geçmişi (case kaydı).
+- **ELO tier → Discord rol senkronu:** `/admin elorank rolkur` 6 tier rolünü
+  uygun renklerle (bakır/demir/altın/zümrüt/elmas/netherite tonları) **otomatik
+  oluşturur**; `/admin elorank rol <tier> <@rol>` ile elle eşlenebilir. Oyuncunun
+  ELO kümesi değişince (plugin `tier_change` eventi) veya hesap bağlanınca rol
+  otomatik verilir/alınır; `/admin elorank senkron` bağlı tüm hesaplara toplu uygular.
+  Botun rolü tier rollerinin üstünde olmalı; yönetilen/üst roller güvenle atlanır.
+- `/sicil @kullanıcı` — botun uyguladığı tüm işlemlerin geçmişi (case kaydı, sayfalı).
+
+### Canlı maç panosu, takımlar & durum panosu
+- `/maç canlı` — **Yenile** butonlu canlı maç panosu (faz, süre, hayatta,
+  border, senaryolar, hayatta kalanlar).
+- `/takımlar` — aktif maçın takım kadroları (hayatta/çevrimdışı bayraklarıyla).
+- `/sıra` — maç katılım kuyruğu. `/senaryolar` — tüm UHC senaryoları + aktifler.
+- **Oto durum panosu:** `/admin durumkanal #kanal` — bot o kanalda ~60 sn'de bir
+  güncellenen sabit bir durum embed'i tutar (sunucu/maç/performans) ve presence'ını
+  canlı tutar (maç varsa `⚔️ hayatta/katılımcı — faz`, yoksa oyuncu sayısı).
+- **Yeni kanal ayarları:** `/admin staffkanal` (rapor/ceza aynası), `/admin
+  rankkanal` (küme değişimi duyuruları), `/admin durumkanal` (durum panosu).
 
 ### Süreli ban & kalıcı zamanlayıcı
 - `/ban` artık `süre` parametresi alır (`1g`, `12sa`, `1hf`…) — süre dolunca bot

@@ -4,6 +4,7 @@ import { okEmbed, errEmbed, baseEmbed, Colors } from '../embeds.js';
 import { mcapi } from '../mcapi.js';
 import { addCase } from '../db.js';
 import { parseDuration, formatDuration, formatSeconds, clean } from '../util.js';
+import { perfEmbed, modHistoryEmbed, modListEmbed } from '../liveembeds.js';
 import { sendLog } from '../modlog.js';
 
 /**
@@ -141,7 +142,65 @@ export default [
           { name: 'Senaryolar', value: match.scenarios?.length ? match.scenarios.join(', ') : 'yok', inline: true },
         );
       }
+      // Performans satırı — eski plugin sürümünde endpoint yoksa sessiz atlanır.
+      const perf = await mcapi.perf();
+      if (perf.ok) {
+        embed.addFields({
+          name: 'Performans',
+          value: `TPS ${perf.tps?.m1 ?? '?'} • ${perf.mspt ?? '?'} ms • ${perf.memory?.usedMb ?? '?'}/${perf.memory?.maxMb ?? '?'} MB`,
+          inline: false,
+        });
+      }
       return interaction.editReply({ embeds: [embed] });
+    },
+  },
+
+  {
+    tier: Tier.REHBER,
+    data: new SlashCommandBuilder()
+      .setName('sunucuperf')
+      .setDescription('Minecraft sunucusunun performansını gösterir (TPS/MSPT/bellek)'),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [perfEmbed(await mcapi.perf())] });
+    },
+  },
+
+  {
+    tier: Tier.MOD,
+    data: new SlashCommandBuilder()
+      .setName('mcsicil')
+      .setDescription('Oyuncunun Minecraft ceza geçmişini gösterir')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+      .addStringOption((o) => o.setName('oyuncu').setDescription('Minecraft oyuncu adı').setRequired(true)),
+    async execute(interaction) {
+      const player = interaction.options.getString('oyuncu', true).trim();
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [modHistoryEmbed(player, await mcapi.modHistory(player))] });
+    },
+  },
+
+  {
+    tier: Tier.MOD,
+    data: new SlashCommandBuilder()
+      .setName('mcbanlist')
+      .setDescription('Minecraft sunucusundaki aktif banları listeler')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [modListEmbed(await mcapi.modList('ban'))] });
+    },
+  },
+
+  {
+    tier: Tier.MOD,
+    data: new SlashCommandBuilder()
+      .setName('mcmutelist')
+      .setDescription('Minecraft sunucusundaki aktif susturmaları listeler')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+    async execute(interaction) {
+      await interaction.deferReply();
+      return interaction.editReply({ embeds: [modListEmbed(await mcapi.modList('mute'))] });
     },
   },
 ];

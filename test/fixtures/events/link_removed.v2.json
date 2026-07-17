@@ -1,0 +1,12 @@
+{
+  "eventId": "1c6b8d9e-2f3a-4b5c-8d0e-7f8a9b0c1d22",
+  "schemaVersion": 2,
+  "type": "link_removed",
+  "occurredAt": "2026-07-14T20:02:11Z",
+  "test": false,
+  "data": {
+    "mc": "Oyuncu2",
+    "discordId": "222333444555666777",
+    "source": "game"
+  }
+}

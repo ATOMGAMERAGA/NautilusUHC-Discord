@@ -1,0 +1,14 @@
+{
+  "eventId": "5b0d2e3f-6c7a-4b8d-9e0f-1a2b3c4d5e66",
+  "schemaVersion": 2,
+  "type": "tier_change",
+  "occurredAt": "2026-07-14T19:13:02Z",
+  "test": false,
+  "data": {
+    "player": "AtomGamer",
+    "oldTier": "Altın",
+    "newTier": "Zümrüt",
+    "elo": 1612,
+    "direction": "promote"
+  }
+}

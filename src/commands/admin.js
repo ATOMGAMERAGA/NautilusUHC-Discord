@@ -8,6 +8,15 @@ import { getSetting, setSetting, addCase } from '../db.js';
 import { config } from '../config.js';
 import { clean } from '../util.js';
 import { ranks, upsertRank, removeRank, resetRanks } from '../ranks.js';
+import {
+  TIER_ROLE_SPECS, ensureTierRoles, setTierRole, roleMap, syncMemberTierRole,
+} from '../rolesync.js';
+import {
+  escalationConfig, setTimeoutThreshold, setBanThreshold, clearEscalation,
+} from '../escalation.js';
+import { raidSettings } from '../security/raid.js';
+import { parseDuration, formatDuration } from '../util.js';
+import { mcapi } from '../mcapi.js';
 import { ticketPanelComponents } from '../tickets.js';
 import { TICKET_TYPES } from '../ticketcore.js';
 
@@ -18,16 +27,92 @@ function parseColor(input) {
   return Number.isFinite(value) && hex.length === 6 ? value : Colors.main;
 }
 
-/** /admin elorank liste|ekle|sil|sıfırla */
-function handleEloRank(interaction, sub) {
+/** /admin elorank liste|ekle|sil|sıfırla|rolkur|rol|senkron */
+async function handleEloRank(interaction, sub) {
   if (sub === 'liste') {
     const list = ranks();
+    const map = roleMap();
     const lines = list.map((r, i) => {
       const upper = i === 0 ? '∞' : list[i - 1].min - 1;
-      return `${r.emoji ?? '🏅'} **${r.name}** — ${r.min} → ${upper} ELO`;
+      const roleId = map[r.name.toLowerCase()];
+      return `${r.emoji ?? '🏅'} **${r.name}** — ${r.min} → ${upper} ELO`
+        + (roleId ? ` • <@&${roleId}>` : '');
     });
     return interaction.reply({
       embeds: [baseEmbed(Colors.main).setTitle('🏆 ELO Rank Kademeleri').setDescription(lines.join('\n'))],
+    });
+  }
+  if (sub === 'rolkur') {
+    // Rolleri oluşturmak birkaç API çağrısı sürer — önce defer.
+    await interaction.deferReply();
+    const res = await ensureTierRoles(interaction.guild);
+    if (!res.ok) {
+      return interaction.editReply({ embeds: [errEmbed(res.error)] });
+    }
+    addCase('elorank_roles', null, interaction.user.id, null,
+      res.results.filter((r) => r.created).length + ' yeni rol');
+    const lines = res.results.map((r) => `${r.created ? '🆕' : '♻️'} **${r.name}** → <@&${r.roleId}>`);
+    return interaction.editReply({
+      embeds: [baseEmbed(Colors.success)
+        .setTitle('🎨 ELO Tier Rolleri Hazır')
+        .setDescription(lines.join('\n')
+          + '\n\n🆕 = yeni oluşturuldu, ♻️ = mevcut rol kullanıldı. '
+          + 'Rol renkleri tier kimliğine göre ayarlandı. '
+          + 'Botun rolünün bu rollerin **üstünde** olduğundan emin ol; '
+          + 'ardından `/admin elorank senkron` ile herkese dağıt.')],
+    });
+  }
+  if (sub === 'rol') {
+    const tierName = interaction.options.getString('isim', true);
+    const role = interaction.options.getRole('rol', true);
+    const me = interaction.guild.members.me;
+    if (role.managed || role.position >= me.roles.highest.position) {
+      return interaction.reply({
+        embeds: [errEmbed(`${role} eşlenemez: yönetilen rol ya da botun rolünün üstünde.`)],
+        ephemeral: true,
+      });
+    }
+    setTierRole(tierName, role.id);
+    addCase('elorank_role_map', null, interaction.user.id, null, `${tierName} → ${role.id}`);
+    return interaction.reply({
+      embeds: [okEmbed(`🎨 **${clean(tierName, 20)}** kademesi ${role} rolüne eşlendi.`)],
+    });
+  }
+  if (sub === 'senkron') {
+    if (!Object.keys(roleMap()).length) {
+      return interaction.reply({
+        embeds: [errEmbed('Önce `/admin elorank rolkur` ile tier rollerini kur.')],
+        ephemeral: true,
+      });
+    }
+    await interaction.deferReply();
+    const res = await mcapi.links();
+    if (!res.ok) {
+      return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+    }
+    const links = (res.links ?? []).filter((l) => l.discordId && l.tier);
+    let synced = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const link of links) {
+      try {
+        const r = await syncMemberTierRole(interaction.guild, link.discordId, link.tier,
+          { actorId: interaction.user.id });
+        if (!r.ok) skipped++;
+        else if (r.changed) synced++;
+        else skipped++;
+      } catch {
+        failed++;
+      }
+    }
+    addCase('elorank_bulk_sync', null, interaction.user.id, null,
+      `${synced} güncellendi / ${links.length} bağlantı`);
+    return interaction.editReply({
+      embeds: [okEmbed(`🔄 Toplu tier rol senkronu bitti.\n`
+        + `• Güncellenen: **${synced}**\n`
+        + `• Değişiklik gerekmeyen/atlanan: **${skipped}**\n`
+        + `• Hata: **${failed}**\n`
+        + `• Toplam bağlantı: **${links.length}**`)],
     });
   }
   if (sub === 'ekle') {
@@ -155,6 +240,49 @@ export default [
         .addRoleOption((o) => o.setName('rol4').setDescription('4. rol'))
         .addRoleOption((o) => o.setName('rol5').setDescription('5. rol'))
         .addStringOption((o) => o.setName('başlık').setDescription('Panel başlığı')))
+      .addSubcommand((s) => s.setName('staffkanal')
+        .setDescription('Rapor/ceza aynası eventlerinin düşeceği staff kanalını ayarlar')
+        .addChannelOption((o) => o.setName('kanal').setDescription('Staff kanalı (boş bırak = kapat)')
+          .addChannelTypes(ChannelType.GuildText)))
+      .addSubcommand((s) => s.setName('rankkanal')
+        .setDescription('ELO küme değişimi duyurularının kanalını ayarlar')
+        .addChannelOption((o) => o.setName('kanal')
+          .setDescription('Rank kanalı (boş bırak = maç kanalına düşer)')
+          .addChannelTypes(ChannelType.GuildText)))
+      .addSubcommand((s) => s.setName('durumkanal')
+        .setDescription('Oto-güncellenen sunucu durum panosunun kanalını ayarlar')
+        .addChannelOption((o) => o.setName('kanal')
+          .setDescription('Durum kanalı (boş bırak = kapat)')
+          .addChannelTypes(ChannelType.GuildText)))
+      .addSubcommand((s) => s.setName('uyarıeşiği')
+        .setDescription('Uyarı sayısına göre otomatik yaptırım eşiklerini ayarlar')
+        .addStringOption((o) => o.setName('tür').setDescription('Eşik türü').setRequired(true)
+          .addChoices(
+            { name: 'timeout (susturma)', value: 'timeout' },
+            { name: 'ban', value: 'ban' },
+            { name: 'kapat (tümü)', value: 'kapat' },
+            { name: 'durum', value: 'durum' },
+          ))
+        .addIntegerOption((o) => o.setName('adet')
+          .setDescription('Kaç uyarıda tetiklensin (timeout/ban için)').setMinValue(1).setMaxValue(50))
+        .addStringOption((o) => o.setName('süre')
+          .setDescription('timeout süresi (örn. 1sa, 1g) — yalnız timeout türünde')))
+      .addSubcommand((s) => s.setName('raidkoruma')
+        .setDescription('Raid korumasını (katılım hızı + min hesap yaşı) yönetir')
+        .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
+          .addChoices(
+            { name: 'aç', value: 'on' },
+            { name: 'kapat', value: 'off' },
+            { name: 'durum', value: 'status' },
+          ).setRequired(true))
+        .addIntegerOption((o) => o.setName('katılım-limiti')
+          .setDescription('Pencere içindeki katılım limiti (varsayılan 8)').setMinValue(2).setMaxValue(100))
+        .addIntegerOption((o) => o.setName('pencere-sn')
+          .setDescription('Katılım penceresi (saniye, varsayılan 30)').setMinValue(5).setMaxValue(600))
+        .addIntegerOption((o) => o.setName('min-hesap-yaşı-gün')
+          .setDescription('Minimum hesap yaşı (gün, 0 = kapalı)').setMinValue(0).setMaxValue(365))
+        .addStringOption((o) => o.setName('aksiyon').setDescription('Raid modunda ne yapılsın')
+          .addChoices({ name: 'kick (at)', value: 'kick' }, { name: 'log (yalnız kaydet)', value: 'log' })))
       .addSubcommandGroup((g) => g.setName('elorank')
         .setDescription('ELO rank kademelerini yönetir')
         .addSubcommand((s) => s.setName('liste').setDescription('Mevcut rank kademelerini listeler'))
@@ -164,7 +292,16 @@ export default [
           .addStringOption((o) => o.setName('emoji').setDescription('Rank emojisi (örn. 💎)')))
         .addSubcommand((s) => s.setName('sil').setDescription('Rank kademesini siler')
           .addStringOption((o) => o.setName('isim').setDescription('Silinecek rank adı').setRequired(true)))
-        .addSubcommand((s) => s.setName('sıfırla').setDescription('Rank kademelerini varsayılana döndürür'))),
+        .addSubcommand((s) => s.setName('sıfırla').setDescription('Rank kademelerini varsayılana döndürür'))
+        .addSubcommand((s) => s.setName('rolkur')
+          .setDescription('6 tier rolünü uygun renklerle otomatik oluşturur/eşler'))
+        .addSubcommand((s) => s.setName('rol')
+          .setDescription('Bir tier\'ı mevcut bir Discord rolüne elle eşler')
+          .addStringOption((o) => o.setName('isim').setDescription('Tier adı').setRequired(true)
+            .addChoices(...TIER_ROLE_SPECS.map((t) => ({ name: t.name, value: t.name }))))
+          .addRoleOption((o) => o.setName('rol').setDescription('Eşlenecek rol').setRequired(true)))
+        .addSubcommand((s) => s.setName('senkron')
+          .setDescription('Bağlı tüm hesapların tier rollerini toplu senkronlar'))),
     async execute(interaction) {
       const group = interaction.options.getSubcommandGroup(false);
       const sub = interaction.options.getSubcommand();
@@ -201,6 +338,40 @@ export default [
           embeds: [okEmbed(role
             ? `📣 Maç duyurularında ${role} etiketlenecek. (Rolü rol panelinden aldırabilirsin.)`
             : '📣 Maç duyuru etiketi kapatıldı.')],
+        });
+      }
+
+      if (sub === 'staffkanal') {
+        const channel = interaction.options.getChannel('kanal');
+        setSetting('staff_channel', channel ? channel.id : '');
+        addCase('staff_channel', null, interaction.user.id, null, channel?.id ?? 'kapalı');
+        return interaction.reply({
+          embeds: [okEmbed(channel
+            ? `🛡️ Oyun içi raporlar ve ceza aynaları ${channel} kanalına düşecek.`
+            : '🛡️ Staff event kanalı kapatıldı — rapor/ceza eventleri duyurulmayacak.')],
+        });
+      }
+
+      if (sub === 'rankkanal') {
+        const channel = interaction.options.getChannel('kanal');
+        setSetting('rank_channel', channel ? channel.id : '');
+        addCase('rank_channel', null, interaction.user.id, null, channel?.id ?? 'varsayılan');
+        return interaction.reply({
+          embeds: [okEmbed(channel
+            ? `📈 ELO küme değişimleri ${channel} kanalında duyurulacak.`
+            : '📈 Rank kanalı ayarı kaldırıldı — duyurular maç kanalına düşer.')],
+        });
+      }
+
+      if (sub === 'durumkanal') {
+        const channel = interaction.options.getChannel('kanal');
+        setSetting('status_channel', channel ? channel.id : '');
+        setSetting('status_message_id', ''); // yeni kanal → pano mesajı yeniden kurulur
+        addCase('status_channel', null, interaction.user.id, null, channel?.id ?? 'kapalı');
+        return interaction.reply({
+          embeds: [okEmbed(channel
+            ? `📊 Durum panosu ${channel} kanalında ~60 sn'de bir güncellenecek.`
+            : '📊 Durum panosu kapatıldı.')],
         });
       }
 
@@ -284,6 +455,83 @@ export default [
         setSetting('log_channel', channel.id);
         addCase('log_channel', null, interaction.user.id, null, channel.id);
         return interaction.reply({ embeds: [okEmbed(`📋 Log kanalı ${channel} olarak ayarlandı.`)] });
+      }
+
+      if (sub === 'uyarıeşiği') {
+        const tur = interaction.options.getString('tür', true);
+        if (tur === 'durum') {
+          const cfg = escalationConfig();
+          const t = cfg.timeout?.count
+            ? `${cfg.timeout.count} uyarı → ${formatDuration(cfg.timeout.durationMs || 3_600_000)} timeout`
+            : 'kapalı';
+          const b = cfg.ban?.count ? `${cfg.ban.count} uyarı → ban` : 'kapalı';
+          return interaction.reply({
+            embeds: [baseEmbed(Colors.main).setTitle('⚙️ Uyarı Eşikleri')
+              .setDescription(`⏱️ **Timeout:** ${t}\n🔨 **Ban:** ${b}`)],
+            ephemeral: true,
+          });
+        }
+        if (tur === 'kapat') {
+          clearEscalation();
+          addCase('warn_threshold', null, interaction.user.id, null, 'kapatıldı');
+          return interaction.reply({ embeds: [okEmbed('⚙️ Otomatik uyarı yaptırımları kapatıldı.')] });
+        }
+        const adet = interaction.options.getInteger('adet');
+        if (!adet) {
+          return interaction.reply({ embeds: [errEmbed('Eşik için `adet` gerekli.')], ephemeral: true });
+        }
+        if (tur === 'timeout') {
+          const rawSure = interaction.options.getString('süre');
+          const durationMs = rawSure ? parseDuration(rawSure) : 3_600_000;
+          if (!durationMs) {
+            return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `1sa`, `1g`.')], ephemeral: true });
+          }
+          setTimeoutThreshold(adet, durationMs);
+          addCase('warn_threshold', null, interaction.user.id, null, `timeout ${adet} → ${formatDuration(durationMs)}`);
+          return interaction.reply({
+            embeds: [okEmbed(`⏱️ **${adet}** uyarıya ulaşan kullanıcı otomatik **${formatDuration(durationMs)}** susturulacak.`)],
+          });
+        }
+        // ban
+        setBanThreshold(adet);
+        addCase('warn_threshold', null, interaction.user.id, null, `ban ${adet}`);
+        return interaction.reply({
+          embeds: [okEmbed(`🔨 **${adet}** uyarıya ulaşan kullanıcı otomatik yasaklanacak.`)],
+        });
+      }
+
+      if (sub === 'raidkoruma') {
+        const durum = interaction.options.getString('durum', true);
+        if (durum === 'status') {
+          const s = raidSettings();
+          return interaction.reply({
+            embeds: [baseEmbed(s.enabled ? Colors.success : Colors.danger)
+              .setTitle('🛡️ Raid Koruması')
+              .setDescription(`Durum: **${s.enabled ? 'AÇIK' : 'KAPALI'}**\n`
+                + `• Katılım limiti: **${s.joinLimit}** / **${s.windowSecs}** sn\n`
+                + `• Min. hesap yaşı: **${s.minAccountAgeDays === 0 ? 'kapalı' : `${s.minAccountAgeDays} gün`}**\n`
+                + `• Raid modu aksiyonu: **${s.action === 'kick' ? 'at (kick)' : 'yalnız logla'}**`)],
+            ephemeral: true,
+          });
+        }
+        // Opsiyonel parametreler her durumda yazılır (verilmişse).
+        const limit = interaction.options.getInteger('katılım-limiti');
+        const windowSecs = interaction.options.getInteger('pencere-sn');
+        const minAge = interaction.options.getInteger('min-hesap-yaşı-gün');
+        const action = interaction.options.getString('aksiyon');
+        if (limit != null) setSetting('raid_join_limit', String(limit));
+        if (windowSecs != null) setSetting('raid_window_secs', String(windowSecs));
+        if (minAge != null) setSetting('raid_min_account_age_days', String(minAge));
+        if (action) setSetting('raid_action', action);
+        const enable = durum === 'on';
+        setSetting('raid_enabled', enable ? '1' : '0');
+        addCase('raid_toggle', null, interaction.user.id, null, enable ? 'açıldı' : 'kapatıldı');
+        const s = raidSettings();
+        return interaction.reply({
+          embeds: [okEmbed(`🛡️ Raid koruması **${enable ? 'açıldı' : 'kapatıldı'}**.\n`
+            + `• Katılım: ${s.joinLimit}/${s.windowSecs}sn • Min. yaş: `
+            + `${s.minAccountAgeDays === 0 ? 'kapalı' : `${s.minAccountAgeDays}g`} • Aksiyon: ${s.action}`)],
+        });
       }
 
       if (sub === 'koruma') {
