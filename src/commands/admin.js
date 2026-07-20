@@ -212,6 +212,9 @@ export default [
       .addSubcommand((s) => s.setName('maçrol')
         .setDescription('Maç duyurularında etiketlenecek rolü ayarlar')
         .addRoleOption((o) => o.setName('rol').setDescription('Bildirim rolü (boş bırak = kapat)')))
+      .addSubcommand((s) => s.setName('otorol')
+        .setDescription('Sunucuya katılan herkese otomatik verilecek rolü ayarlar')
+        .addRoleOption((o) => o.setName('rol').setDescription('Otorol (boş bırak = kapat)')))
       .addSubcommand((s) => s.setName('ticketpanel')
         .setDescription('Destek talebi panelini bir kanala gönderir')
         .addChannelOption((o) => o.setName('kanal').setDescription('Panel kanalı')
@@ -338,6 +341,17 @@ export default [
           embeds: [okEmbed(role
             ? `📣 Maç duyurularında ${role} etiketlenecek. (Rolü rol panelinden aldırabilirsin.)`
             : '📣 Maç duyuru etiketi kapatıldı.')],
+        });
+      }
+
+      if (sub === 'otorol') {
+        const role = interaction.options.getRole('rol');
+        setSetting('autorole_id', role ? role.id : 'off');
+        addCase('autorole_id', null, interaction.user.id, null, role?.id ?? 'kapalı');
+        return interaction.reply({
+          embeds: [okEmbed(role
+            ? `🎟️ Sunucuya katılan herkese ${role} rolü verilecek.`
+            : '🎟️ Otorol kapatıldı.')],
         });
       }
 

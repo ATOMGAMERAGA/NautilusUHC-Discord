@@ -152,7 +152,14 @@ function eventEmbed(type, data, test) {
         );
       // MVP oylaması sonucu — kazananın hemen altında. Veri yoksa (test maçı,
       // solo, oylama kapalı) alan sessizce atlanır.
-      if (data.mvpName) {
+      if (data.mvpName && !data.mvpVotes) {
+        // Oylamasız MVP (en çok öldüren) — oy sayısı gösterilmez.
+        e.addFields({
+          name: "🏆 Maçın MVP'si",
+          value: `${clean(data.mvpName, 30)} — ${data.mvpKills ?? 0} kill`,
+          inline: true,
+        });
+      } else if (data.mvpName) {
         e.addFields({
           name: "🏆 Maçın MVP'si",
           value: `${clean(data.mvpName, 30)} — ${data.mvpVotes ?? 0} oy, ${data.mvpKills ?? 0} kill`,
