@@ -65,6 +65,16 @@ client.on(Events.GuildCreate, async (guild) => {
   if (guild.id !== config.guildId) {
     console.warn(`[kilit] İzinsiz sunucuya eklenme engellendi: ${guild.name} (${guild.id})`);
     await guild.leave().catch(() => null);
+    return;
+  }
+  // Bot hedef sunucuya SONRADAN eklendi (süreç zaten ayaktaydı): slash
+  // komutlarını restart beklemeden hemen kaydet. (Açılışta sunucuda değilse
+  // ClientReady kaydı atlanıyordu; bu handler o boşluğu kapatır.)
+  try {
+    await guild.commands.set(allCommands.map((c) => c.data.toJSON()));
+    console.log(`[bot] ${allCommands.length} slash komutu kaydedildi (sonradan eklenme).`);
+  } catch (err) {
+    console.error('[bot] Komut kaydı başarısız:', err);
   }
 });
 
