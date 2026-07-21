@@ -85,6 +85,62 @@ export default [
 
   {
     tier: Tier.MEMBER,
+    data: new SlashCommandBuilder()
+      .setName('komutlar')
+      .setDescription('Minecraft sunucusundaki (NautilusUHC plugin) tüm komutları gösterir'),
+    async execute(interaction) {
+      // Plugin tarafındaki CommandCatalog ile aynı içerik — oyun içinde
+      // /komutlar GUI'si, Discord'da bu ephemeral mesaj.
+      const oyuncu = [
+        '`/komutlar` — Tüm komutları sayfalı GUI\'de gösterir',
+        '`/spawn` — Spawn noktasına ışınlar (alias: `/hub` `/lobi` `/lobby`)',
+        '`/team` — Takım menüsü: kur, davet et, ayrıl (`create` `invite` `accept` `decline` `leave` `inventory`)',
+        '`/stats [oyuncu]` — Elo, rütbe, W/L, K/D istatistikleri (alias: `/istatistik`)',
+        '`/top [elo|galibiyet|kill]` — İlk 10 sıralaması (alias: `/siralama`)',
+        '`/latescatter` — Süren maça geç katılım (ilk 5 dk)',
+        '`/mackatil` — Hızlı katılım / maç kaydı (alias: `/macakatil` `/katil`)',
+        '`/saat` — Gerçek Türkiye saati, time.now senkronlu (alias: `/zaman` `/tarih`)',
+        '`/trims` — Zırh deseni işleme menüsü',
+        '`/link` — Discord hesap bağlama kodu (alias: `/bagla`)',
+        '`/report <oyuncu> <sebep>` — Oyuncu raporlama (alias: `/rapor`)',
+      ].join('\n');
+      const host = [
+        '`/host` — Adım adım maç kurulum sihirbazı (`zamanla` `iptal` `liste` `baslat` `bitir`)',
+        '`/testuhc` — Test paneli: aşama atlama, hızlı deathmatch, başlat/bitir',
+        '`/uhc <forcestart|stop|reset>` — Anında başlat / durdur / dünya reseti',
+        '`/uhcstart` — Geri sayımla başlat',
+        '`/scenario` — Senaryoları aç/kapat',
+        '`/revive <oyuncu|all|team>` — Diriltme',
+        '`/setspawn` — Kalıcı spawn ayarla, DB\'de saklanır (alias: `/setlobbyspawn`)',
+        '`/betterping` — Ping telafisi: durum/reload/test',
+        '`/disguise` `/undisguise` `/disguisecheck` — Takma ad işlemleri',
+        '`/givegoldenhead [oyuncu]` — Golden head verir',
+        '`/banner [create]` — Sancak kütüphanesi',
+        '`/testhost` — Discord köprüsü test eventleri',
+      ].join('\n');
+      const mod = [
+        '`/ban` `/tempban` `/unban` — Yasaklama (alias: `/yasakla` `/sureliyasak` `/yasakkaldir`)',
+        '`/mute` `/tempmute` `/unmute` — Susturma (alias: `/sustur` `/surelisustur` `/susturkaldir`)',
+        '`/kick` — Atma (alias: `/at`) · `/warn` `/unwarn` `/warns` — Uyarılar',
+        '`/banlist` `/mutelist` — Aktif ceza listeleri',
+        '`/freeze` (alias: `/ss`) · `/vanish` · `/mutechat` · `/reports`',
+        '`/unlink <mc|dc>` — Hesap bağlantısı silme (alias: `/kayitsil`)',
+      ].join('\n');
+      const embed = baseEmbed(Colors.main)
+        .setTitle('⚔️ NautilusUHC — Oyun İçi Komutlar')
+        .setDescription('Minecraft sunucusundaki plugin komutları ve işlevleri. '
+          + 'Oyun içinde `/komutlar` yazarsan aynı listeyi tıklanabilir GUI olarak görürsün.')
+        .addFields(
+          { name: '🎮 Oyuncu Komutları', value: oyuncu },
+          { name: '🎯 Host Komutları (nautilus.host)', value: host },
+          { name: '🛡️ Moderasyon (nautilus.mod)', value: mod },
+        );
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    },
+  },
+
+  {
+    tier: Tier.MEMBER,
     data: new SlashCommandBuilder().setName('yardım').setDescription('Kullanabileceğin komutları listeler'),
     async execute(interaction) {
       const tier = tierOf(interaction.member);
@@ -94,6 +150,7 @@ export default [
         .addFields({
           name: '🌍 Herkes',
           value: '`/ping` `/sunucubilgi` `/kullanıcıbilgi` `/avatar` `/yardım` `/hatırlat`\n'
+            + '`/komutlar` — Minecraft sunucusundaki plugin komutları\n'
             + '`/profil` — skinli oyuncu profili (ELO, rank, maçlar)\n'
             + '`/sıralama` — ELO/galibiyet/kill liderlik tablosu\n'
             + '`/mcdurum` — sunucu & maç durumu\n'

@@ -41,7 +41,7 @@ export const config = {
     rehber: env('ROLE_REHBER', '1522149952527138889'),
   },
 
-  /** Base URL of the NautilusUHC plugin bridge API (Pelican Panel host), e.g. http://1.2.3.4:8571 */
+  /** Base URL of the NautilusUHC plugin bridge API (Pelican Panel host), e.g. http://1.2.3.4:25000 */
   mcApiUrl: env('MC_API_URL', '').replace(/\/+$/, ''),
 
   /**
@@ -64,8 +64,11 @@ export const config = {
   /** HMAC imzalı isteklerde kabul edilen saat sapması / replay penceresi (ms). */
   bridgeReplayWindowMs: Number.parseInt(env('BRIDGE_REPLAY_WINDOW_MS', '300000'), 10),
 
-  /** HTTP port the bot listens on for plugin events (Coolify exposes it). */
-  port: Number.parseInt(env('PORT', '8080'), 10),
+  /**
+   * HTTP port the bot listens on for plugin events (Dokploy/Coolify exposes
+   * it). Nautilus altyapısında köprü için ayrılan port: 25000.
+   */
+  port: Number.parseInt(env('PORT', '25000'), 10),
 
   dbPath: env('DB_PATH', 'data/bot.db'),
 
