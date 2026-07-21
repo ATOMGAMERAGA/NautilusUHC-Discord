@@ -119,11 +119,13 @@ export default [
         '`/testhost` — Discord köprüsü test eventleri',
       ].join('\n');
       const mod = [
+        '`/panel` — Moderasyon yönetim GUI\'si: oyuncular, yasaklı arama, hazır cezalar, sicil (alias: `/modpanel`)',
+        '`/sicil <oyuncu>` — Kalıcı ceza geçmişi (alias: `/gecmis`)',
         '`/ban` `/tempban` `/unban` — Yasaklama (alias: `/yasakla` `/sureliyasak` `/yasakkaldir`)',
         '`/mute` `/tempmute` `/unmute` — Susturma (alias: `/sustur` `/surelisustur` `/susturkaldir`)',
         '`/kick` — Atma (alias: `/at`) · `/warn` `/unwarn` `/warns` — Uyarılar',
         '`/banlist` `/mutelist` — Aktif ceza listeleri',
-        '`/freeze` (alias: `/ss`) · `/vanish` · `/mutechat` · `/reports`',
+        '`/freeze` (alias: `/ss`) · `/vanish` · `/mutechat` · `/reports [temizle]`',
         '`/unlink <mc|dc>` — Hesap bağlantısı silme (alias: `/kayitsil`)',
       ].join('\n');
       const embed = baseEmbed(Colors.main)
