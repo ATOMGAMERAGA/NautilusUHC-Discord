@@ -93,7 +93,10 @@ export default [
       // /komutlar GUI'si, Discord'da bu ephemeral mesaj.
       const oyuncu = [
         '`/komutlar` — Tüm komutları sayfalı GUI\'de gösterir',
-        '`/spawn` — Spawn noktasına ışınlar (alias: `/hub` `/lobi` `/lobby`)',
+        '`/spawn` — Spawn\'a ışınlar, 5 sn bekleme süreli (alias: `/hub` `/lobi` `/lobby`)',
+        '`/msg` `/r` `/msgtoggle` — Özel mesaj / yanıt / kapatma (alias: `/tell` `/w` `/fisilda` `/dm`)',
+        '`/ping [oyuncu]` — Gecikmeni gösterir (alias: `/gecikme`)',
+        '`/liste` — Çevrimiçi oyuncular (alias: `/list` `/online`)',
         '`/team` — Takım menüsü: kur, davet et, ayrıl (`create` `invite` `accept` `decline` `leave` `inventory`)',
         '`/stats [oyuncu]` — Elo, rütbe, W/L, K/D istatistikleri (alias: `/istatistik`)',
         '`/top [elo|galibiyet|kill]` — İlk 10 sıralaması (alias: `/siralama`)',
@@ -128,6 +131,15 @@ export default [
         '`/freeze` (alias: `/ss`) · `/vanish` · `/mutechat` · `/reports [temizle]`',
         '`/unlink <mc|dc>` — Hesap bağlantısı silme (alias: `/kayitsil`)',
       ].join('\n');
+      const araclar = [
+        '`/duyuru <mesaj>` — Sunucu duyurusu (alias: `/broadcast` `/bc`)',
+        '`/sohbettemizle` — Sohbeti temizler (alias: `/clearchat` `/cc`)',
+        '`/yavasmod <sn|kapat>` — Sohbet yavaş modu (alias: `/slowmode`)',
+        '`/socialspy` — Özel mesaj izleme (alias: `/spy`)',
+        '`/fly` `/heal` `/feed` — Uçuş / iyileştirme / doyurma (alias: `/ucus` `/iyilestir` `/doyur`)',
+        '`/gm <0|1|2|3> [oyuncu]` — Oyun modu kısayolu',
+        '`/envbak <oyuncu>` — Envanter görüntüleme (alias: `/invsee`)',
+      ].join('\n');
       const embed = baseEmbed(Colors.main)
         .setTitle('⚔️ NautilusUHC — Oyun İçi Komutlar')
         .setDescription('Minecraft sunucusundaki plugin komutları ve işlevleri. '
@@ -136,6 +148,7 @@ export default [
           { name: '🎮 Oyuncu Komutları', value: oyuncu },
           { name: '🎯 Host Komutları (nautilus.host)', value: host },
           { name: '🛡️ Moderasyon (nautilus.mod)', value: mod },
+          { name: '🧰 Yetkili Araçları (nautilus.mod.*)', value: araclar },
         );
       return interaction.reply({ embeds: [embed], ephemeral: true });
     },
