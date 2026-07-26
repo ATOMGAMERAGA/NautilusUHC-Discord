@@ -97,23 +97,25 @@ export default [
         '`/msg` `/r` `/msgtoggle` — Özel mesaj / yanıt / kapatma (alias: `/tell` `/w` `/fisilda` `/dm`)',
         '`/ping [oyuncu]` — Gecikmeni gösterir (alias: `/gecikme`)',
         '`/liste` — Çevrimiçi oyuncular (alias: `/list` `/online`)',
-        '`/team` — Takım menüsü: kur, davet et, ayrıl (`create` `invite` `accept` `decline` `leave` `inventory`)',
+        '`/team` — Davetle numaralı takım kur (`invite` `check` `leave`; kabul: `accept`/`decline`)',
         '`/stats [oyuncu]` — Elo, rütbe, W/L, K/D istatistikleri (alias: `/istatistik`)',
         '`/top [elo|galibiyet|kill]` — İlk 10 sıralaması (alias: `/siralama`)',
         '`/latescatter` — Süren maça geç katılım (ilk 5 dk)',
         '`/mackatil` — Hızlı katılım / maç kaydı (alias: `/macakatil` `/katil`)',
-        '`/saat` — Gerçek Türkiye saati, time.now senkronlu (alias: `/zaman` `/tarih`)',
+        '`/saat` — Gerçek Türkiye saati, whattimeis.in senkronlu (alias: `/zaman` `/tarih`)',
         '`/trims` — Zırh deseni işleme menüsü',
         '`/link` — Discord hesap bağlama kodu (alias: `/bagla`)',
         '`/report <oyuncu> <sebep>` — Oyuncu raporlama (alias: `/rapor`)',
       ].join('\n');
       const host = [
         '`/host` — Adım adım maç kurulum sihirbazı (`zamanla` `iptal` `liste` `baslat` `bitir`)',
+        '`/nextevent` — Süre beklemeden sıradaki maç etkinliğine geç',
+        '`/team limit <sayı>` — Takım kişi limiti (1 = FFA)',
         '`/testuhc` — Test paneli: aşama atlama, hızlı deathmatch, başlat/bitir',
         '`/uhc <forcestart|stop|reset>` — Anında başlat / durdur / dünya reseti',
         '`/uhcstart` — Geri sayımla başlat',
         '`/scenario` — Senaryoları aç/kapat',
-        '`/revive <oyuncu|all|team>` — Diriltme',
+        '`/revive <oyuncu|all|team <numara>>` — Diriltme',
         '`/setspawn` — Kalıcı spawn ayarla, DB\'de saklanır (alias: `/setlobbyspawn`)',
         '`/betterping` — Ping telafisi: durum/reload/test',
         '`/disguise` `/undisguise` `/disguisecheck` — Takma ad işlemleri',
@@ -196,7 +198,7 @@ export default [
         embed.addFields({
           name: '👑 Admin+',
           value: '`/rolver` `/rolal` `/duyuru` `/embed` `/kayıtsil`\n'
-            + '`/admin dclinkgönder|logkanal|koruma|automod|hoşgeldin|maçrol`\n'
+            + '`/admin dclinkgönder|logkanal|mackanal|koruma|automod|hoşgeldin|maçrol`\n'
             + '`/admin ticketpanel|ticketkategori|rolpanel|elorank`',
         });
       }

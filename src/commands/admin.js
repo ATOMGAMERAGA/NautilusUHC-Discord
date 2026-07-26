@@ -193,6 +193,10 @@ export default [
         .setDescription('Moderasyon/güvenlik log kanalını ayarlar')
         .addChannelOption((o) => o.setName('kanal').setDescription('Log kanalı')
           .addChannelTypes(ChannelType.GuildText).setRequired(true)))
+      .addSubcommand((s) => s.setName('mackanal')
+        .setDescription('Maç duyuru kanalını ayarlar (planlama/başlama/sonuç embedleri)')
+        .addChannelOption((o) => o.setName('kanal').setDescription('Maç duyuru kanalı')
+          .addChannelTypes(ChannelType.GuildText).setRequired(true)))
       .addSubcommand((s) => s.setName('koruma')
         .setDescription('Patlama korumasını (anti-nuke) yönetir')
         .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
@@ -469,6 +473,13 @@ export default [
         setSetting('log_channel', channel.id);
         addCase('log_channel', null, interaction.user.id, null, channel.id);
         return interaction.reply({ embeds: [okEmbed(`📋 Log kanalı ${channel} olarak ayarlandı.`)] });
+      }
+
+      if (sub === 'mackanal') {
+        const channel = interaction.options.getChannel('kanal', true);
+        setSetting('match_channel', channel.id);
+        addCase('match_channel', null, interaction.user.id, null, channel.id);
+        return interaction.reply({ embeds: [okEmbed(`⚔️ Maç duyuru kanalı ${channel} olarak ayarlandı.`)] });
       }
 
       if (sub === 'uyarıeşiği') {

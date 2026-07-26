@@ -47,14 +47,40 @@ export const EVENT_ROUTES = {
   link_removed: { setting: 'staff_channel', suppressDiscordSource: true },
 };
 
+/** Maç kanalı id'si: /admin mackanal ayarı > MATCH_CHANNEL_ID (env/varsayılan). */
+export function matchChannelId() {
+  return getSetting('match_channel', '') || config.matchChannelId;
+}
+
 /** Eventin gideceği kanal id'si; null = yönlendirme yok (bastırıldı/ayarsız). */
 export function resolveEventChannel(type, data = {}) {
   const route = EVENT_ROUTES[type];
-  if (!route) return data.channelId ?? config.matchChannelId; // eski 6 tip
+  if (!route) return data.channelId ?? matchChannelId(); // eski 6 tip
   if (route.suppressDiscordSource && data.source === 'discord') return null;
   const fromSetting = route.setting ? getSetting(route.setting, '') : '';
   if (fromSetting) return fromSetting;
-  return route.fallbackMatch ? config.matchChannelId : null;
+  return route.fallbackMatch ? matchChannelId() : null;
+}
+
+/**
+ * Ayarlı kanal id'si sunucuda yoksa (yanlış env, silinmiş kanal) İSME göre
+ * son çare arama: "maçlar" / "maclar" adlı (ya da adı bunlarla başlayan) ilk
+ * yazı kanalı. Böylece maç duyuruları kanal id'si yanlış diye sessizce kaybolmaz.
+ */
+export function findMatchChannelByName(client) {
+  try {
+    const guild = client.guilds.cache.get(config.guildId);
+    if (!guild) return null;
+    const normalize = (s) => String(s ?? '').toLowerCase()
+      .replaceAll('ç', 'c').replaceAll('ğ', 'g').replaceAll('ı', 'i')
+      .replaceAll('ö', 'o').replaceAll('ş', 's').replaceAll('ü', 'u');
+    const wanted = ['maclar', 'mac-duyuru', 'mac-duyurular', 'mac-duyurulari'];
+    const channel = guild.channels.cache.find((c) => c.isTextBased?.()
+      && wanted.some((w) => normalize(c.name) === w || normalize(c.name).startsWith(w)));
+    return channel ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function safeEqual(a, b) {
@@ -414,10 +440,23 @@ export function createRequestHandler(client, hooks = {}) {
       }
 
       try {
-        const channel = await client.channels.fetch(channelId).catch(() => null);
+        let channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased()) {
-          if (eventId) processedEvents.release(eventId); // retry edilebilsin
-          return respond(502, { ok: false, error: 'channel_unavailable', correlationId });
+          // Kanal id'si geçersiz/erişilemez: maç kanalına giden eventlerde son
+          // çare olarak "maçlar" adlı kanalı isimle bul (yanlış env id'si maç
+          // duyurularını sessizce yutmasın).
+          const isMatchRoute = channelId === matchChannelId();
+          const fallback = isMatchRoute ? findMatchChannelByName(client) : null;
+          if (fallback) {
+            console.warn(`[bridge] kanal ${channelId} bulunamadı; isimle bulunan #${fallback.name} kullanılıyor. `
+              + 'Kalıcı çözüm: /admin mackanal ile doğru kanalı ayarla.');
+            channel = fallback;
+          } else {
+            if (eventId) processedEvents.release(eventId); // retry edilebilsin
+            console.error(`[bridge] olay kanalı bulunamadı (${type} → ${channelId}). `
+              + 'MATCH_CHANNEL_ID env değerini veya /admin mackanal ayarını kontrol et.');
+            return respond(502, { ok: false, error: 'channel_unavailable', correlationId });
+          }
         }
         await channel.send(embedPayload);
         console.log(`[bridge] olay işlendi: ${type}${test ? ' (test)' : ''} (${correlationId})`);

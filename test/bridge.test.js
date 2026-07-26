@@ -13,7 +13,8 @@ process.env.BRIDGE_ALLOW_LEGACY = '1';
 const dbFile = join(tmpdir(), `nautilus-bridge-test-${process.pid}.db`);
 process.env.DB_PATH = dbFile;
 
-const { createRequestHandler, verifySignature, buildAnnouncement } = await import('../src/httpserver.js');
+const { createRequestHandler, verifySignature, buildAnnouncement, matchChannelId, findMatchChannelByName } = await import('../src/httpserver.js');
+const { config } = await import('../src/config.js');
 const { setSetting, processedEvents } = await import('../src/db.js');
 
 const SECRET = process.env.BRIDGE_SECRET;
@@ -332,4 +333,51 @@ test('processedEvents.claim/release idempotency sözleşmesi', () => {
   assert.equal(processedEvents.claim(id, 't'), false);
   processedEvents.release(id);
   assert.equal(processedEvents.claim(id, 't'), true);
+});
+
+/* ---------------- maç kanalı yönlendirme (/admin mackanal + isim fallback) ---------------- */
+
+test('match_channel ayarı maç duyuru kanalını geçersiz kılar', async () => {
+  sends.length = 0;
+  fetchedChannels.length = 0;
+  setSetting('match_channel', '424242');
+  try {
+    assert.equal(matchChannelId(), '424242');
+    const r = await postEvent(v2('match_start', { host: 'Atom', players: 2 }));
+    assert.equal(r.status, 200);
+    assert.equal(fetchedChannels.at(-1), '424242');
+    assert.equal(sends.length, 1);
+  } finally {
+    setSetting('match_channel', '');
+  }
+});
+
+test('kanal id geçersizse "maçlar" kanalı isimle bulunur ve duyuru oraya gider', async () => {
+  const localSends = [];
+  const namedChannel = {
+    name: 'maçlar',
+    isTextBased: () => true,
+    send: async (p) => { localSends.push(p); return { id: '2' }; },
+  };
+  const guild = { channels: { cache: { find: (fn) => [namedChannel].find(fn) } } };
+  const guildClient = {
+    isReady: () => true,
+    channels: { fetch: async () => { throw new Error('unknown channel'); } },
+    guilds: { cache: { get: (id) => (id === config.guildId ? guild : undefined) } },
+  };
+  assert.equal(findMatchChannelByName(guildClient), namedChannel);
+
+  const localServer = createServer(createRequestHandler(guildClient, {}));
+  await new Promise((r) => localServer.listen(0, '127.0.0.1', r));
+  const localBase = `http://127.0.0.1:${localServer.address().port}`;
+  try {
+    const raw = JSON.stringify(v2('match_start', { host: 'Atom', players: 5 }));
+    const res = await fetch(`${localBase}/api/event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...sign(raw) }, body: raw,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(localSends.length, 1);
+  } finally {
+    localServer.close();
+  }
 });
