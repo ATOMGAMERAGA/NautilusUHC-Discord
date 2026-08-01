@@ -1,16 +1,51 @@
 import { config } from './config.js';
+import { bridgeQueue } from './bridgequeue.js';
 
 /**
- * HTTP client for the NautilusUHC plugin bridge API. Every call is authenticated
- * with the shared secret. Failures resolve to `{ ok: false, error }` instead of
- * throwing so command handlers can show a clean Turkish error.
+ * NautilusUHC plugin köprüsünün istemcisi. Hatalar fırlatılmaz; komut
+ * işleyicileri temiz bir Türkçe mesaj gösterebilsin diye `{ ok: false, error }`
+ * olarak çözülür.
+ *
+ * İKİ TAŞIMA MODU vardır:
+ *
+ *  1. TERS KÖPRÜ (varsayılan, önerilen) — plugin bota bağlanıp iş çeker.
+ *     Minecraft sunucusunda HİÇBİR port açılmaz, dolayısıyla DDoS yüzeyi yok.
+ *     Plugin uzun-yoklama yaptığı sürece (bridgeQueue.pluginConnected()) tüm
+ *     istekler kuyruk üzerinden gider ve MC_API_URL'e hiç ihtiyaç duyulmaz.
+ *
+ *  2. DOĞRUDAN (eski) — MC_API_URL ayarlıysa ve plugin ters köprüye bağlı
+ *     değilse, plugin'in açık portuna doğrudan HTTP yapılır. Yalnızca geçiş
+ *     dönemi içindir; MC_API_URL'i boş bırakmak artık tavsiye edilir.
  */
 
 const TIMEOUT_MS = 8000;
 
+/** Plugin'in yanıtını mcapi sözleşmesine ({ok, ...}) çevirir. */
+function shape(status, data) {
+  if (status >= 400) {
+    return { ok: false, error: data?.error || `Sunucu hatası (${status}).`, status };
+  }
+  return { ok: true, ...data };
+}
+
 async function request(path, { method = 'GET', body } = {}) {
+  // 1) Ters köprü — plugin aktif olarak yokluyorsa her zaman bunu tercih et.
+  if (bridgeQueue.pluginConnected()) {
+    try {
+      const res = await bridgeQueue.enqueue({ method, path, body: body ?? null }, TIMEOUT_MS);
+      return shape(res.status, res.data);
+    } catch (err) {
+      return { ok: false, error: `Minecraft sunucusuna ulaşılamadı (${err.message}).` };
+    }
+  }
+
+  // 2) Doğrudan (eski) mod.
   if (!config.mcApiUrl) {
-    return { ok: false, error: 'MC API adresi ayarlı değil (MC_API_URL).' };
+    return {
+      ok: false,
+      error: 'Minecraft sunucusu köprüye bağlı değil. Sunucu kapalı olabilir; '
+        + 'birazdan tekrar dene.',
+    };
   }
   try {
     const res = await fetch(config.mcApiUrl + path, {

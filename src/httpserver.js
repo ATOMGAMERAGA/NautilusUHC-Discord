@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { getSetting, processedEvents } from './db.js';
 import { baseEmbed, Colors, Assets } from './embeds.js';
 import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
+import { bridgeQueue, MAX_POLL_WAIT_MS } from './bridgequeue.js';
+import { publicStats } from './statsproxy.js';
 
 /**
  * Receives lifecycle events from the NautilusUHC plugin (Pelican host) and turns
@@ -12,6 +14,12 @@ import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
  * POST /api/event
  *   Zarf v2: { eventId, schemaVersion: 2, type, occurredAt, test, matchId?, data }
  *   Zarf v1 (legacy): { type, test?, data }
+ *
+ * TERS KÖPRÜ (bkz. bridgequeue.js) — Minecraft sunucusunda port açmamak için
+ * bot→plugin yönü de buradan geçer:
+ *   GET  /api/bridge/jobs?wait=…   plugin uzun-yoklama ile iş çeker (HMAC)
+ *   POST /api/bridge/jobs/result   plugin işin sonucunu yollar (HMAC)
+ *   GET  /api/v1/stats/…           sitenin okuduğu salt-okunur API (public)
  *
  * Auth (docs/INTEGRATION-CONTRACT.md):
  *   Tercih edilen — HMAC-SHA256 imza başlıkları:
@@ -121,11 +129,51 @@ export function verifySignature({ timestamp, nonce, signature }, rawBody, secret
 
 /** Basit IP başına kayan pencere rate limiti. */
 const rateBuckets = new Map(); // ip -> number[]
-function rateLimited(ip, { limit = 60, windowMs = 60_000, now = Date.now() } = {}) {
-  const arr = (rateBuckets.get(ip) ?? []).filter((t) => now - t < windowMs);
+function rateLimited(ip, { limit = 60, windowMs = 60_000, now = Date.now(), bucket = 'event' } = {}) {
+  const key = `${bucket}:${ip}`;
+  const arr = (rateBuckets.get(key) ?? []).filter((t) => now - t < windowMs);
   arr.push(now);
-  rateBuckets.set(ip, arr);
+  rateBuckets.set(key, arr);
   return arr.length > limit;
+}
+
+/** Public stats uçlarının kökü — site bu yolu okur, kimlik doğrulaması YOKTUR. */
+export const PUBLIC_STATS_BASE = '/api/v1/stats';
+
+/**
+ * İstek gövdesini okur. 256 KB'ı aşan istek bağlantı seviyesinde kesilir
+ * (Promise asla çözülmez; soket kapandığı için istek de biter).
+ */
+function readRawBody(req) {
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+      if (raw.length > 256_000) req.destroy();
+    });
+    req.on('end', () => resolve(raw));
+  });
+}
+
+/**
+ * Köprü isteğini doğrular: önce HMAC imzası, yoksa (izinliyse) eski
+ * X-Bridge-Secret başlığı. Dönüş: null = geçerli, aksi hâlde hata kodu.
+ */
+function authenticate(req, raw) {
+  const sigHeaders = {
+    timestamp: req.headers['x-nautilus-timestamp'],
+    nonce: req.headers['x-nautilus-nonce'],
+    signature: req.headers['x-nautilus-signature'],
+  };
+  if (sigHeaders.timestamp || sigHeaders.nonce || sigHeaders.signature) {
+    const err = verifySignature(sigHeaders, raw, config.bridgeSecret);
+    return err ? `unauthorized:${err}` : null;
+  }
+  if (config.bridgeAllowLegacy) {
+    const secret = req.headers['x-bridge-secret'];
+    return !secret || !safeEqual(secret, config.bridgeSecret) ? 'unauthorized' : null;
+  }
+  return 'unauthorized:signature_required';
 }
 
 function eventEmbed(type, data, test) {
@@ -355,11 +403,88 @@ export function createRequestHandler(client, hooks = {}) {
         auth: config.bridgeAllowLegacy ? ['hmac-sha256', 'legacy-shared-secret'] : ['hmac-sha256'],
       });
     }
-    if (req.method !== 'POST' || req.url !== '/api/event') {
+    const url = new URL(req.url ?? '/', 'http://nautilus.local');
+    const path = url.pathname;
+    const ip = req.socket?.remoteAddress ?? '?';
+
+    /* ---------------- Public stats (kimlik doğrulaması YOK) --------------- */
+    // Site bu uçları okur. Salt-okunur, beyaz listeli ve önbellekli; veriyi
+    // ters köprü kuyruğu üzerinden plugin'den alır.
+    if (path === PUBLIC_STATS_BASE || path.startsWith(`${PUBLIC_STATS_BASE}/`)) {
+      const cors = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept',
+      };
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, cors);
+        return res.end();
+      }
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8', ...cors });
+        return res.end(JSON.stringify({ error: 'method_not_allowed' }));
+      }
+      // Public uç herkese açık: event kuyruğundan ayrı, daha geniş bir limit.
+      if (rateLimited(ip, { limit: 300, bucket: 'stats' })) {
+        res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', ...cors });
+        return res.end(JSON.stringify({ error: 'rate_limited' }));
+      }
+      return publicStats(path.slice(PUBLIC_STATS_BASE.length), url.search)
+        .then(({ status, body, stale }) => {
+          res.writeHead(status, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=10',
+            ...(stale ? { 'X-Nautilus-Stale': '1' } : {}),
+            ...cors,
+          });
+          res.end(JSON.stringify(body));
+        });
+    }
+
+    /* ---------------- Ters köprü: plugin uzun-yoklaması ------------------- */
+    if (path === '/api/bridge/jobs' && req.method === 'GET') {
+      if (!config.bridgeSecret) return respond(401, { ok: false, error: 'unauthorized' });
+      // Uzun-yoklama açık bir bağlantı tutar; event limitine takılmasın diye
+      // kendi kovasında sayılır.
+      if (rateLimited(ip, { limit: 120, bucket: 'poll' })) {
+        return respond(429, { ok: false, error: 'rate_limited' });
+      }
+      const authErr = authenticate(req, '');
+      if (authErr) return respond(401, { ok: false, error: authErr });
+      // DİKKAT: `|| MAX` yazılamaz — wait=0 ("hemen dön") falsy olduğu için
+      // 25 sn'lik varsayılana düşer ve istek boşuna asılı kalırdı.
+      const asked = Number(url.searchParams.get('wait'));
+      const wait = Number.isFinite(asked) && asked >= 0
+        ? Math.min(asked, MAX_POLL_WAIT_MS)
+        : MAX_POLL_WAIT_MS;
+      return bridgeQueue.takeJobs(wait).then((jobs) => respond(200, { ok: true, jobs }));
+    }
+
+    if (path === '/api/bridge/jobs/result' && req.method === 'POST') {
+      if (!config.bridgeSecret) return respond(401, { ok: false, error: 'unauthorized' });
+      if (rateLimited(ip, { limit: 600, bucket: 'poll' })) {
+        return respond(429, { ok: false, error: 'rate_limited' });
+      }
+      return readRawBody(req).then((raw) => {
+        const authErr = authenticate(req, raw);
+        if (authErr) return respond(401, { ok: false, error: authErr });
+        let payload;
+        try {
+          payload = JSON.parse(raw || '{}');
+        } catch {
+          return respond(400, { ok: false, error: 'bad_json' });
+        }
+        // İş bilinmiyorsa (zaman aşımına uğramış) 200 döneriz: plugin'in bunu
+        // tekrar denemesinin bir anlamı yok, çağıran taraf çoktan vazgeçti.
+        const known = bridgeQueue.completeJob(payload.jobId, payload.status, payload.data);
+        return respond(200, { ok: true, unknown: !known });
+      });
+    }
+
+    if (req.method !== 'POST' || path !== '/api/event') {
       return respond(404, { ok: false, error: 'not_found' });
     }
 
-    const ip = req.socket?.remoteAddress ?? '?';
     if (rateLimited(ip)) {
       return respond(429, { ok: false, error: 'rate_limited', mesaj: 'Çok fazla istek; kısa süre sonra tekrar dene.' });
     }
@@ -367,30 +492,10 @@ export function createRequestHandler(client, hooks = {}) {
       return respond(401, { ok: false, error: 'unauthorized' });
     }
 
-    let raw = '';
-    req.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 256_000) req.destroy();
-    });
-    req.on('end', async () => {
+    readRawBody(req).then(async (raw) => {
       // ---- Auth: önce HMAC, yoksa (izinliyse) legacy shared secret ----
-      const sigHeaders = {
-        timestamp: req.headers['x-nautilus-timestamp'],
-        nonce: req.headers['x-nautilus-nonce'],
-        signature: req.headers['x-nautilus-signature'],
-      };
-      const hasSig = sigHeaders.timestamp || sigHeaders.nonce || sigHeaders.signature;
-      if (hasSig) {
-        const err = verifySignature(sigHeaders, raw, config.bridgeSecret);
-        if (err) return respond(401, { ok: false, error: `unauthorized:${err}` });
-      } else if (config.bridgeAllowLegacy) {
-        const secret = req.headers['x-bridge-secret'];
-        if (!secret || !safeEqual(secret, config.bridgeSecret)) {
-          return respond(401, { ok: false, error: 'unauthorized' });
-        }
-      } else {
-        return respond(401, { ok: false, error: 'unauthorized:signature_required' });
-      }
+      const authErr = authenticate(req, raw);
+      if (authErr) return respond(401, { ok: false, error: authErr });
 
       let envelope;
       try {

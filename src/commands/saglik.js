@@ -3,12 +3,16 @@ import { Tier } from '../permissions.js';
 import { baseEmbed, Colors } from '../embeds.js';
 import { db, pendingTaskCount, ticketsV2, getSetting } from '../db.js';
 import { mcapi } from '../mcapi.js';
+import { bridgeQueue } from '../bridgequeue.js';
 import { formatDuration } from '../util.js';
 
 /**
  * /sağlık — bot sağlık paneli (Rehber+): uptime, DB, köprü erişimi,
  * zamanlayıcı kuyruğu, açık talep sayısı ve modül anahtarları.
  * Köprü erişilemezse "bozuk" değil "kısıtlı" sayılır (degraded, not fatal).
+ *
+ * Ters köprüde plugin'in BOTA bağlanması gerekir; "bağlı değil" görüyorsan
+ * sorun büyük ihtimalle plugin tarafındadır (bridge.bot-url / bridge.token).
  */
 
 const BRIDGE_TIMEOUT_MS = 3000;
@@ -38,6 +42,7 @@ export default [
         new Promise((resolve) => setTimeout(resolve, BRIDGE_TIMEOUT_MS, { ok: false, error: 'zaman aşımı (3sn)' })),
       ]);
 
+      const queue = bridgeQueue.stats();
       const uptimeMs = Math.floor(process.uptime() * 1000);
       const pending = pendingTaskCount();
       const openTickets = ticketsV2.openCount();
@@ -51,6 +56,14 @@ export default [
           {
             name: '🌉 Köprü (plugin)',
             value: bridge.ok ? '🟢 Erişilebilir' : `🟡 Erişilemiyor — ${bridge.error ?? 'bilinmiyor'}`,
+            inline: true,
+          },
+          {
+            name: '🔌 Ters köprü',
+            value: queue.connected
+              ? `🟢 Plugin bağlı${queue.pending ? ` — ${queue.pending} iş kuyrukta` : ''}`
+              : '🟡 Plugin bağlı değil — sunucu kapalı olabilir ya da '
+                + 'plugin config.yml → `bridge.bot-url` / `bridge.token` eksik',
             inline: true,
           },
           { name: '📆 Bekleyen görev', value: String(pending), inline: true },

@@ -151,10 +151,10 @@ TPS/MSPT/bellek/uptime'ı gösterir. Oyun içi ceza/rapor/faz olayları köprü
      intent'lerini aç).
    - `BRIDGE_SECRET` — uzun rastgele bir anahtar; plugin `config.yml > bridge.token`
      ile **birebir aynı** olmalı.
-   - `MC_API_URL` — Pelican sunucusunun IP'si + plugin köprü portu
-     (örn. `http://1.2.3.4:8571`). Pelican'da bu portu **Allocations**'tan ekle.
-4. Botun `PORT`'unu (8080) Coolify'da dışarı aç ve domain ver; bu adresi plugin
-   `config.yml > bridge.bot-url` alanına yaz.
+   - `MC_API_URL` — **boş bırak.** Ters köprüde gerekmez (aşağıya bak).
+4. Botun `PORT`'unu (varsayılan `25000`) Coolify'da bir **domaine** bağla
+   (HTTPS açık); bu adresi plugin `config.yml > bridge.bot-url` alanına yaz.
+   Domain artık zorunludur — site de veriyi buradan okur.
 5. Deploy et. Bot açılışta slash komutlarını otomatik kaydeder.
 
 ## Kurulum (Dokploy)
@@ -164,28 +164,57 @@ Coolify yerine Dokploy kullanıyorsan akış neredeyse aynıdır:
 1. **Projects → Create Project** → içinde **Create Service → Application**.
 2. **Provider**: GitHub (private repo `NautilusUHC-Discord`, branch `main`).
 3. **Build Type**: **Dockerfile**.
-4. **Environment**: `DISCORD_TOKEN`, `BRIDGE_SECRET`, `MC_API_URL` (+ gerekiyorsa
-   kanal/rol id'leri). `.env.example`'a bak.
+4. **Environment**: `DISCORD_TOKEN`, `BRIDGE_SECRET` (+ gerekiyorsa kanal/rol
+   id'leri). `MC_API_URL` boş kalsın. `.env.example`'a bak.
 5. **Volumes**: `/app/data` için kalıcı bir volume ekle (SQLite verisi).
-6. **Domains**: **Add Domain** → bot domaini, **Container Port** `8080`, HTTPS aç.
+6. **Domains**: **Add Domain** → bot domaini, **Container Port** `25000`, HTTPS aç.
    Bu adresi plugin `config.yml > bridge.bot-url` alanına yaz.
 7. **Deploy**.
 
+Adım adım Dokploy rehberi: [`DOKPLOY-KURULUM.md`](DOKPLOY-KURULUM.md).
+
 > Site ile birlikte kullanım: sıralama/istatistik web sitesi ayrı bir projedir
-> (`../NautilusUHC-Site`) ve plugin'in **token'sız public-stats** API'sini kullanır.
-> Bot ise **token'lı** köprüyü kullanır. İkisi aynı veriye bakar; site tarafında
-> bot için özel ayar gerekmez. Ayrıntı: [`../NautilusUHC-Site/README.md`](../NautilusUHC-Site/README.md).
+> (`../NautilusUHC-Site`) ve verisini **bu bottan** okur
+> (`MC_STATS_API=https://bot.nautilusuhc.com`). Yani botun alan adı hem plugin
+> hem site için zorunludur. Ayrıntı: [`../NautilusUHC-Site/README.md`](../NautilusUHC-Site/README.md).
 
 ### Minecraft tarafı (Pelican Panel)
+
+Ek allocation/port açman **gerekmez** — plugin bota kendisi bağlanır.
 `NautilusUHC/plugins/NautilusUHC/config.yml`:
 
 ```yaml
 bridge:
   enabled: true
-  port: 8571          # Pelican'da ayrılan ek port
+  mode: outbound          # ters köprü: plugin bota dışa bağlanır
+  bind: 127.0.0.1         # köprü yalnız konteyner içinden erişilebilir
+  port: 25000             # SADECE konteyner içi
   token: "BRIDGE_SECRET ile aynı"
-  bot-url: "https://bot-domainin"  # Coolify'daki bot adresi
+  bot-url: "https://bot.nautilusuhc.com"   # boş bırakma → hiçbir event gitmez
+  public-stats:
+    enabled: true         # siteyi besleyen salt-okunur API
+    base-path: "/api/v1/stats"
 ```
+
+## Ters köprü (reverse bridge)
+
+Eskiden Minecraft sunucusunda açık bir port vardı ve bot/site oraya bağlanırdı;
+o port DDoS hedefi olduğu için kapatıldı. Artık **tüm bağlantılar plugin'den
+dışarı** doğrudur ve bot tek public giriş noktasıdır:
+
+| Uç | Yön | Auth | Ne yapar |
+|---|---|---|---|
+| `POST /api/event` | plugin → bot | HMAC | Maç/faz/ceza duyuruları |
+| `GET /api/bridge/jobs?wait=25000` | plugin → bot | HMAC | Uzun-yoklama; bekleyen işleri çeker |
+| `POST /api/bridge/jobs/result` | plugin → bot | HMAC | İşin sonucunu geri yollar |
+| `GET /api/v1/stats/*` | site → bot | yok | Salt-okunur, beyaz listeli, önbellekli |
+
+Bir slash komutu MC verisi istediğinde bot işi kuyruğa koyar (`src/bridgequeue.js`),
+plugin uzun-yoklamayla alır, kendi içinde `127.0.0.1:<bridge.port>` üzerinden
+çalıştırır ve sonucu geri gönderir. Plugin bağlı değilse istek 8 sn'de zaman
+aşımına uğrar ve kullanıcı temiz bir Türkçe hata görür — asla asılı kalmaz.
+`MC_API_URL` yalnızca plugin köprüye bağlı DEĞİLKEN kullanılan eski doğrudan
+bağlantı yedeğidir; normal kurulumda **boş bırakılır**.
 
 ## Bridge güvenliği (Faz 2)
 
