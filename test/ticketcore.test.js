@@ -186,7 +186,7 @@ test('checkOpenAllowed: kara listedeki kullanıcı reddedilir', () => {
   const r = checkOpenAllowed({ blacklisted: true });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'blacklist');
-  assert.match(r.message, /engellenmiş/);
+  assert.match(r.message, /erişimin kapatılmış/);
 });
 
 test('checkOpenAllowed: açık talep limiti', () => {

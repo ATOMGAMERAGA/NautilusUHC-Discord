@@ -5,12 +5,14 @@ import {
 } from 'discord.js';
 import { config } from './config.js';
 import {
-  ticketsV2, ticketMessages, ticketNotes, ticketBlacklist, getSetting, addCase,
+  ticketsV2, ticketMessages, ticketBlacklist, getSetting, addCase,
 } from './db.js';
-import { baseEmbed, okEmbed, errEmbed, Colors } from './embeds.js';
+import {
+  baseEmbed, okEmbed, errEmbed, warnEmbed, neutralEmbed, brandFooter, failureEmbed, Colors,
+} from './embeds.js';
 import { Tier, tierOf } from './permissions.js';
 import { sendLog, logChannelId } from './modlog.js';
-import { trDateTime, clean } from './util.js';
+import { trDateTime, clean, mentionUsers } from './util.js';
 import {
   TICKET_TYPES, ticketTypeLabel, STATUS_LABELS, PRIORITY_LABELS, PRIORITIES,
   applyTransition, nextPriority, slaState, renderTranscript, checkOpenAllowed,
@@ -89,28 +91,59 @@ function buildOverwrites(guild, openerId) {
   return overwrites;
 }
 
+/** Öncelik, talebin rengini belirler — acil bir talep listede hemen ayrışır. */
+const PRIORITY_COLORS = {
+  urgent: Colors.danger,
+  high: Colors.warn,
+  normal: Colors.brand,
+  low: Colors.info,
+};
+
+/** Durum satırı: nokta + etiket, her yüzeyde aynı biçimde. */
+export function statusLine(status) {
+  const dot = status === 'open' ? '🟢' : status === 'pending' ? '🟡' : '⚫';
+  return `${dot} ${STATUS_LABELS[status] ?? status}`;
+}
+
+/**
+ * Talep kanalının ilk mesajı — bir kontrol paneli gibi çalışır: talebin
+ * kim tarafından, hangi konuda açıldığı ve şu anki durumu tek bakışta okunur.
+ * Alanlar sabit sıradadır ki farklı taleplerde göz aynı yerden okusun.
+ */
 export function buildTicketEmbed(ticket) {
   const t = TICKET_TYPES[ticket.type] ?? TICKET_TYPES.genel;
-  const embed = baseEmbed(Colors.main)
-    .setTitle(`${t.emoji} Destek Talebi #${ticket.id} — ${clean(ticket.subject ?? t.label, 100)}`)
-    .setDescription(ticket.description ? clean(ticket.description, 1500) : '_Açıklama yok._')
+  const embed = baseEmbed(ticket.status === 'closed'
+    ? Colors.neutral
+    : PRIORITY_COLORS[ticket.priority] ?? Colors.brand)
+    .setTitle(`${t.emoji} #${ticket.id} — ${clean(ticket.subject ?? t.label, 100)}`)
+    .setDescription(ticket.description ? clean(ticket.description, 1500) : '_Açıklama girilmemiş._')
     .addFields(
-      { name: 'Tür', value: t.label, inline: true },
-      { name: 'Durum', value: STATUS_LABELS[ticket.status] ?? ticket.status, inline: true },
+      { name: 'Durum', value: statusLine(ticket.status), inline: true },
       { name: 'Öncelik', value: PRIORITY_LABELS[ticket.priority] ?? ticket.priority, inline: true },
+      { name: 'Tür', value: t.label, inline: true },
       { name: 'Açan', value: `<@${ticket.user_id}>`, inline: true },
-      { name: 'İlgilenen', value: ticket.assignee_id ? `<@${ticket.assignee_id}>` : '_Henüz üstlenilmedi_', inline: true },
+      {
+        name: 'İlgilenen yetkili',
+        value: ticket.assignee_id ? `<@${ticket.assignee_id}>` : '_Henüz üstlenilmedi_',
+        inline: true,
+      },
+      { name: 'Açılış', value: trDateTime(ticket.created_at), inline: true },
     );
   if (ticket.reopen_count > 0) {
     embed.addFields({ name: 'Yeniden açılma', value: `${ticket.reopen_count} kez`, inline: true });
   }
-  return embed;
+  return embed.setFooter(brandFooter(`Talep #${ticket.id}`));
 }
 
+/**
+ * Talep kontrolleri. Buton stilleri anlam taşır: ana yetkili eylemi Primary,
+ * yardımcı eylemler Secondary, yıkıcı (kapatma) eylem Danger.
+ */
 export function ticketButtonRows(ticket) {
   const staff = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket:claim:${ticket.id}`)
-      .setLabel(ticket.assignee_id ? 'Bırak' : 'Üstlen').setEmoji('✋').setStyle(ButtonStyle.Primary),
+      .setLabel(ticket.assignee_id ? 'Talebi Bırak' : 'Talebi Üstlen').setEmoji('✋')
+      .setStyle(ticket.assignee_id ? ButtonStyle.Secondary : ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`ticket:prio:${ticket.id}`)
       .setLabel('Öncelik').setEmoji('⚡').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`ticket:hold:${ticket.id}`)
@@ -127,7 +160,7 @@ export function ticketButtonRows(ticket) {
 export function ticketPanelComponents() {
   const menu = new StringSelectMenuBuilder()
     .setCustomId('ticket:type')
-    .setPlaceholder('Bir destek konusu seç…')
+    .setPlaceholder('Konu seç ve talebini aç')
     .addOptions(Object.entries(TICKET_TYPES).map(([value, t]) => ({
       value, label: t.label, description: t.desc, emoji: t.emoji,
     })));
@@ -140,7 +173,11 @@ export function ticketPanelComponents() {
 
 function openGate(userId) {
   if (!ticketsEnabled()) {
-    return { ok: false, message: 'Destek sistemi şu anda **devre dışı**. Daha sonra tekrar dene.' };
+    return {
+      ok: false,
+      reason: 'disabled',
+      message: 'Destek sistemi şu anda kapalı. Kısa süre sonra tekrar dener veya bir yetkiliye yazabilirsin.',
+    };
   }
   return checkOpenAllowed({
     blacklisted: Boolean(ticketBlacklist.get(userId)),
@@ -151,11 +188,25 @@ function openGate(userId) {
   });
 }
 
+/** Açma engelinin türüne göre doğru tonda kart üretir. */
+function gateEmbed(gate) {
+  const titles = {
+    blacklist: 'Destek Erişimin Kapalı',
+    limit: 'Zaten Açık Talebin Var',
+    cooldown: 'Biraz Beklemen Gerekiyor',
+    disabled: 'Destek Sistemi Kapalı',
+  };
+  const title = titles[gate.reason] ?? 'Talep Açılamadı';
+  return gate.reason === 'blacklist'
+    ? errEmbed(gate.message, title)
+    : warnEmbed(gate.message, title);
+}
+
 async function showCreateModal(interaction, type) {
   const t = TICKET_TYPES[type] ?? TICKET_TYPES.genel;
   const gate = openGate(interaction.user.id);
   if (!gate.ok) {
-    return interaction.reply({ embeds: [errEmbed(gate.message)], ephemeral: true });
+    return interaction.reply({ embeds: [gateEmbed(gate)], ephemeral: true });
   }
   const modal = new ModalBuilder()
     .setCustomId(`ticket:create:${TICKET_TYPES[type] ? type : 'genel'}`)
@@ -163,18 +214,19 @@ async function showCreateModal(interaction, type) {
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder().setCustomId('konu').setLabel('Konu')
-          .setPlaceholder('Sorununu tek cümleyle özetle')
+          .setPlaceholder(t.subjectHint ?? 'Örn: Hesabımı bağlayamıyorum')
           .setStyle(TextInputStyle.Short).setMinLength(5).setMaxLength(100).setRequired(true),
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder().setCustomId('aciklama').setLabel('Açıklama')
-          .setPlaceholder('Sorununu ayrıntılı anlat: ne oldu, ne zaman, hata mesajı vs.')
+          .setPlaceholder('Ne oldu, ne zaman oldu, hangi adımları denedin?')
           .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000).setRequired(true),
       ),
     );
   if (t.extraField) {
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder().setCustomId('hedef').setLabel(t.extraField)
+        .setPlaceholder(t.extraHint ?? 'Örn: Atom veya #124')
         .setStyle(TextInputStyle.Short).setMaxLength(100).setRequired(true),
     ));
   }
@@ -184,7 +236,7 @@ async function showCreateModal(interaction, type) {
 async function createTicket(interaction, type) {
   await interaction.deferReply({ ephemeral: true });
   const gate = openGate(interaction.user.id);
-  if (!gate.ok) return interaction.editReply({ embeds: [errEmbed(gate.message)] });
+  if (!gate.ok) return interaction.editReply({ embeds: [gateEmbed(gate)] });
 
   const guild = interaction.guild;
   const subject = interaction.fields.getTextInputValue('konu').trim();
@@ -208,10 +260,11 @@ async function createTicket(interaction, type) {
       reason: `Destek talebi #${id}: ${interaction.user.tag}`,
     });
   } catch (err) {
+    // Ham Discord API hatası kullanıcıya gösterilmez; yetkili konsolda görür.
+    console.error('[ticket] kanal oluşturulamadı:', err.message);
     ticketsV2.close(id, { reason: `kanal oluşturulamadı: ${err.message}` });
     return interaction.editReply({
-      embeds: [errEmbed(`Talep kanalı oluşturulamadı: ${err.message}\n`
-        + 'Kategori ayarını (`/admin ticketkategori`) ve bot izinlerini kontrol edin.')],
+      embeds: [failureEmbed('Destek kanalın açılamadı. Bir yetkiliye haber verirsen hemen ilgilenilir.')],
     });
   }
 
@@ -229,13 +282,24 @@ async function createTicket(interaction, type) {
     content: `${interaction.user}`,
     embeds: [buildTicketEmbed(fresh)],
     components: ticketButtonRows(fresh),
+    allowedMentions: mentionUsers(interaction.user.id),
   });
   await sendLog(interaction.client, {
-    title: '🎫 Destek Talebi Açıldı',
+    title: 'Destek Talebi Açıldı',
     color: Colors.info,
-    description: `**#${id}** • ${ticketTypeLabel(type)} • ${interaction.user} → ${channel}\nKonu: ${clean(subject, 150)}`,
+    fields: [
+      { name: 'Talep', value: `**#${id}** • ${ticketTypeLabel(type)}`, inline: true },
+      { name: 'Açan', value: `${interaction.user}`, inline: true },
+      { name: 'Kanal', value: `${channel}`, inline: true },
+      { name: 'Konu', value: clean(subject, 200), inline: false },
+    ],
   });
-  return interaction.editReply({ embeds: [okEmbed(`🎫 **#${id}** numaralı destek talebin açıldı: ${channel}`)] });
+  return interaction.editReply({
+    embeds: [okEmbed(
+      `**#${id}** numaralı talebin oluşturuldu.\nKanal → ${channel}\n\n`
+      + 'Bir yetkili en kısa sürede talebini inceleyecek. Ayrıntıları o kanala yazabilirsin.',
+      '🎫 Destek Talebi Açıldı',
+    )] });
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,7 +315,11 @@ export async function openTicket(interaction) {
 export async function closeTicket(interaction) {
   const ticket = ticketsV2.getByChannel(interaction.channel?.id);
   if (!ticket) {
-    return interaction.reply({ embeds: [errEmbed('Bu kanal bir destek talebi değil.')], ephemeral: true });
+    return interaction.reply({
+      embeds: [errEmbed('Bu komut yalnızca destek talebi kanallarında çalışır.\n'
+        + 'Yeni bir talep açmak için `/destek aç` kullanabilirsin.', 'Destek Kanalı Değil')],
+      ephemeral: true,
+    });
   }
   return startCloseConfirm(interaction, ticket);
 }
@@ -267,16 +335,19 @@ function canClose(interaction, ticket) {
 async function startCloseConfirm(interaction, ticket) {
   if (!canClose(interaction, ticket)) {
     return interaction.reply({
-      embeds: [errEmbed('Talebi yalnızca açan kişi veya yetkililer kapatabilir.')], ephemeral: true,
+      embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
+      ephemeral: true,
     });
   }
   return interaction.reply({
-    embeds: [baseEmbed(Colors.warn)
-      .setTitle('🔒 Talep kapatılsın mı?')
-      .setDescription(`**#${ticket.id}** numaralı talep kapatılacak, transcript kaydedilecek ve kanal silinecek.`)],
+    embeds: [warnEmbed(
+      `**#${ticket.id}** kapatılacak: kanal silinecek, konuşma kaydı arşivlenip sana DM olarak gönderilecek.\n`
+      + 'Devam etmek için kapatma sebebini soracağım.',
+      'Talep Kapatılsın mı?',
+    )],
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`ticket:closeok:${ticket.id}`)
-        .setLabel('Evet, kapat').setStyle(ButtonStyle.Danger),
+        .setLabel('Talebi Kapat').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`ticket:closecancel:${ticket.id}`)
         .setLabel('Vazgeç').setStyle(ButtonStyle.Secondary),
     )],
@@ -284,11 +355,13 @@ async function startCloseConfirm(interaction, ticket) {
   });
 }
 
+/** Kapanış DM'indeki 1-5 yıldız değerlendirme satırı. */
 function ratingRow(ticketId) {
   return new ActionRowBuilder().addComponents(
     [1, 2, 3, 4, 5].map((n) => new ButtonBuilder()
       .setCustomId(`ticket:rate:${ticketId}:${n}`)
-      .setLabel('⭐'.repeat(n))
+      .setLabel(`${n}`)
+      .setEmoji('⭐')
       .setStyle(n >= 4 ? ButtonStyle.Success : ButtonStyle.Secondary)),
   );
 }
@@ -296,7 +369,7 @@ function ratingRow(ticketId) {
 async function performClose(interaction, ticket, reason) {
   const tr = applyTransition(ticket, 'closed');
   if (!tr.ok) {
-    return interaction.reply({ embeds: [errEmbed(tr.error)], ephemeral: true });
+    return interaction.reply({ embeds: [errEmbed(tr.error, 'Talep Kapatılamadı')], ephemeral: true });
   }
   await interaction.deferReply().catch(() => null);
 
@@ -314,12 +387,19 @@ async function performClose(interaction, ticket, reason) {
     const logChannel = await interaction.client.channels.fetch(logId).catch(() => null);
     if (logChannel?.isTextBased()) {
       await logChannel.send({
-        embeds: [baseEmbed(Colors.dark)
-          .setTitle(`🎫 Destek Talebi Kapatıldı — #${ticket.id}`)
-          .setDescription(`Açan: <@${ticket.user_id}> • Kapatan: ${interaction.user}\n`
-            + `Tür: ${ticketTypeLabel(ticket.type)} • Konu: ${clean(ticket.subject ?? '-', 150)}\n`
-            + `Sebep: ${clean(reason, 300)} • Mesaj: ${rows.length}`)],
+        embeds: [baseEmbed(Colors.neutral)
+          .setTitle('Destek Talebi Kapatıldı')
+          .addFields(
+            { name: 'Talep', value: `**#${ticket.id}** • ${ticketTypeLabel(ticket.type)}`, inline: true },
+            { name: 'Açan', value: `<@${ticket.user_id}>`, inline: true },
+            { name: 'Kapatan', value: `${interaction.user}`, inline: true },
+            { name: 'Konu', value: clean(ticket.subject ?? '—', 200), inline: false },
+            { name: 'Kapanış sebebi', value: clean(reason, 300), inline: true },
+            { name: 'Mesaj sayısı', value: String(rows.length), inline: true },
+          )
+          .setTimestamp()],
         files: [new AttachmentBuilder(Buffer.from(transcript, 'utf8'), { name: fileName })],
+        allowedMentions: { parse: [] },
       }).catch(() => null);
     }
   }
@@ -328,21 +408,36 @@ async function performClose(interaction, ticket, reason) {
   try {
     const opener = await interaction.client.users.fetch(ticket.user_id);
     const dmPayload = {
-      embeds: [baseEmbed(Colors.main)
-        .setTitle(`🎫 Destek talebin kapatıldı — #${ticket.id}`)
-        .setDescription(`Konu: ${clean(ticket.subject ?? '-', 150)}\n`
-          + `Kapanış sebebi: ${clean(reason, 300)}\n\n`
-          + 'Transcript ektedir. Destek deneyimini aşağıdan puanlayabilirsin (1-5 yıldız).')],
+      embeds: [baseEmbed(Colors.brand)
+        .setTitle('🎫 Destek Talebin Kapatıldı')
+        .setDescription(`**#${ticket.id}** — ${clean(ticket.subject ?? '—', 150)}`)
+        .addFields(
+          { name: 'Kapanış sebebi', value: clean(reason, 300), inline: false },
+          {
+            name: 'Konuşma kaydı',
+            value: 'Talebin tam kaydı bu mesajın ekinde. Aynı konu tekrar ederse yeni bir talep açman yeterli.',
+            inline: false,
+          },
+        )
+        .setFooter(brandFooter(`Talep #${ticket.id}`))
+        .setTimestamp()],
       files: [new AttachmentBuilder(Buffer.from(transcript, 'utf8'), { name: fileName })],
     };
-    if (fresh.satisfaction == null) dmPayload.components = [ratingRow(ticket.id)];
+    if (fresh.satisfaction == null) {
+      dmPayload.embeds[0].addFields({
+        name: 'Nasıl gitti?',
+        value: 'Aldığın desteği 1-5 yıldız arasında puanlayabilirsin.',
+      });
+      dmPayload.components = [ratingRow(ticket.id)];
+    }
     await opener.send(dmPayload);
   } catch {
     /* DM kapalı — transcript log kanalında zaten duruyor */
   }
 
   await interaction.editReply({
-    embeds: [okEmbed(`🔒 **#${ticket.id}** kapatıldı. Kanal 5 saniye içinde silinecek — transcript kalıcı olarak saklandı.`)],
+    embeds: [okEmbed(`**#${ticket.id}** kapatıldı ve konuşma kaydı arşivlendi.\n`
+      + 'Bu kanal 5 saniye içinde silinecek.', '🔒 Talep Kapatıldı')],
   }).catch(() => null);
 
   const channel = interaction.channel;
@@ -355,7 +450,7 @@ async function performClose(interaction, ticket, reason) {
 
 export async function reopenTicket(client, ticketId, actor) {
   const ticket = ticketsV2.get(ticketId);
-  if (!ticket) return { ok: false, error: `#${ticketId} numaralı talep bulunamadı.` };
+  if (!ticket) return { ok: false, error: `**#${ticketId}** numaralı bir talep kaydı yok.` };
   const tr = applyTransition(ticket, 'open');
   if (!tr.ok) return { ok: false, error: tr.error };
 
@@ -374,7 +469,8 @@ export async function reopenTicket(client, ticketId, actor) {
       reason: `Destek talebi #${ticket.id} yeniden açıldı (${actor.tag ?? actor.id})`,
     });
   } catch (err) {
-    return { ok: false, error: `Kanal oluşturulamadı: ${err.message}` };
+    console.error('[ticket] yeniden açma kanalı oluşturulamadı:', err.message);
+    return { ok: false, error: 'Talep kanalı oluşturulamadı. Kategori ayarını ve bot izinlerini kontrol et.' };
   }
 
   ticketsV2.reopen(ticket.id, channel.id);
@@ -388,12 +484,17 @@ export async function reopenTicket(client, ticketId, actor) {
     content: `<@${ticket.user_id}>`,
     embeds: [buildTicketEmbed(fresh)],
     components: ticketButtonRows(fresh),
+    allowedMentions: mentionUsers(ticket.user_id),
   });
   addCase('ticket_reopen', ticket.user_id, actor.id, null, `#${ticket.id}`);
   await sendLog(client, {
-    title: '🎫 Destek Talebi Yeniden Açıldı',
+    title: 'Destek Talebi Yeniden Açıldı',
     color: Colors.warn,
-    description: `**#${ticket.id}** • <@${actor.id}> tarafından → ${channel}`,
+    fields: [
+      { name: 'Talep', value: `**#${ticket.id}**`, inline: true },
+      { name: 'Açan yetkili', value: `<@${actor.id}>`, inline: true },
+      { name: 'Kanal', value: `${channel}`, inline: true },
+    ],
   });
   return { ok: true, channel, ticket: fresh };
 }
@@ -404,7 +505,7 @@ export async function reopenTicket(client, ticketId, actor) {
 
 export async function addUserToTicket(client, ticket, userId) {
   const channel = await client.channels.fetch(ticket.channel_id).catch(() => null);
-  if (!channel) return { ok: false, error: 'Talep kanalı bulunamadı.' };
+  if (!channel) return { ok: false, error: 'Bu talebin kanalı artık mevcut değil.' };
   await channel.permissionOverwrites.edit(userId, {
     ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true,
   });
@@ -412,9 +513,9 @@ export async function addUserToTicket(client, ticket, userId) {
 }
 
 export async function removeUserFromTicket(client, ticket, userId) {
-  if (userId === ticket.user_id) return { ok: false, error: 'Talebi açan kişi kanaldan çıkarılamaz.' };
+  if (userId === ticket.user_id) return { ok: false, error: 'Talebi açan kişi kendi kanalından çıkarılamaz.' };
   const channel = await client.channels.fetch(ticket.channel_id).catch(() => null);
-  if (!channel) return { ok: false, error: 'Talep kanalı bulunamadı.' };
+  if (!channel) return { ok: false, error: 'Bu talebin kanalı artık mevcut değil.' };
   await channel.permissionOverwrites.delete(userId).catch(() => null);
   return { ok: true, channel };
 }
@@ -436,17 +537,36 @@ async function refreshTicketMessage(interaction, ticket) {
   }).catch(() => null);
 }
 
+/** Destek sistemi kapalıyken verilen tek tip yanıt. */
+function systemOffEmbed() {
+  return warnEmbed('Destek sistemi şu anda kapalı. Kısa süre sonra tekrar dene.', 'Destek Sistemi Kapalı');
+}
+
+/** Kapalı/silinmiş bir talebin butonuna basıldığında. */
+function inactiveEmbed() {
+  return neutralEmbed('Bu talep artık açık değil, üzerinde işlem yapılamıyor.', 'Talep Kapalı');
+}
+
+function alreadyClosedEmbed() {
+  return neutralEmbed('Bu talep zaten kapatılmış.', 'Talep Kapalı');
+}
+
+/** Yetkili gerektiren talep işlemleri için tek tip ret. */
+function staffOnlyEmbed(action) {
+  return errEmbed(`${action} işlemi **Rehber** ve üzeri yetkililere açıktır.`, 'Yetki Gerekli');
+}
+
 export const ticketComponents = {
   'ticket:open': (interaction) => {
     if (!ticketsEnabled()) {
-      return interaction.reply({ embeds: [errEmbed('Destek sistemi şu anda **devre dışı**.')], ephemeral: true });
+      return interaction.reply({ embeds: [systemOffEmbed()], ephemeral: true });
     }
     return openTicket(interaction);
   },
 
   'ticket:type': async (interaction) => {
     if (!ticketsEnabled()) {
-      return interaction.reply({ embeds: [errEmbed('Destek sistemi şu anda **devre dışı**.')], ephemeral: true });
+      return interaction.reply({ embeds: [systemOffEmbed()], ephemeral: true });
     }
     const type = interaction.values?.[0];
     return showCreateModal(interaction, TICKET_TYPES[type] ? type : 'genel');
@@ -460,14 +580,16 @@ export const ticketComponents = {
   'ticket:claim': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep artık aktif değil.')], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
     }
     const tier = tierOf(interaction.member);
     if (ticket.assignee_id) {
       // Bırakma: üstlenen kişi veya BMOD+.
       if (interaction.user.id !== ticket.assignee_id && tier < Tier.BMOD) {
         return interaction.reply({
-          embeds: [errEmbed('Talebi yalnızca üstlenen yetkili veya Baş Mod+ bırakabilir.')], ephemeral: true,
+          embeds: [errEmbed('Bir talebi yalnızca onu üstlenen yetkili ya da Baş Mod ve üzeri bırakabilir.',
+            'Talep Bırakılamaz')],
+          ephemeral: true,
         });
       }
       ticketsV2.unclaim(ticket.id);
@@ -475,10 +597,12 @@ export const ticketComponents = {
       const fresh = ticketsV2.get(ticket.id);
       await refreshTicketMessage(interaction, fresh);
       await interaction.channel?.setName(channelNameFor(fresh, interaction.channel.name.split('-').pop() ?? 'uye', false)).catch(() => null);
-      return interaction.followUp({ embeds: [okEmbed(`✋ **#${ticket.id}** bırakıldı — talep tekrar sahipsiz.`)] }).catch(() => null);
+      return interaction.followUp({
+        embeds: [neutralEmbed(`**#${ticket.id}** yeniden sahipsiz. Başka bir yetkili üstlenebilir.`, 'Talep Bırakıldı')],
+      }).catch(() => null);
     }
     if (tier < Tier.REHBER) {
-      return interaction.reply({ embeds: [errEmbed('Talepleri yalnızca yetkililer (Rehber+) üstlenebilir.')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Talep üstlenme')], ephemeral: true });
     }
     ticketsV2.claim(ticket.id, interaction.user.id);
     ticketsV2.setFirstResponse(ticket.id);
@@ -487,17 +611,17 @@ export const ticketComponents = {
     await refreshTicketMessage(interaction, fresh);
     await interaction.channel?.setName(channelNameFor(fresh, interaction.channel.name.split('-').pop() ?? 'uye', true)).catch(() => null);
     return interaction.followUp({
-      embeds: [okEmbed(`✋ **#${ticket.id}** talebini ${interaction.user} üstlendi.`)],
+      embeds: [okEmbed(`${interaction.user} bu talebi üstlendi ve seninle ilgilenecek.`, '✋ Talep Üstlenildi')],
     }).catch(() => null);
   },
 
   'ticket:prio': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep artık aktif değil.')], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
     }
     if (tierOf(interaction.member) < Tier.REHBER) {
-      return interaction.reply({ embeds: [errEmbed('Önceliği yalnızca yetkililer (Rehber+) değiştirebilir.')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Öncelik değiştirme')], ephemeral: true });
     }
     const next = nextPriority(ticket.priority);
     ticketsV2.setPriority(ticket.id, next);
@@ -505,36 +629,37 @@ export const ticketComponents = {
     const fresh = ticketsV2.get(ticket.id);
     await refreshTicketMessage(interaction, fresh);
     return interaction.followUp({
-      embeds: [okEmbed(`⚡ **#${ticket.id}** önceliği: **${PRIORITY_LABELS[next]}**`)],
+      embeds: [okEmbed(`**#${ticket.id}** artık **${PRIORITY_LABELS[next]}** öncelikli.`, '⚡ Öncelik Güncellendi')],
     }).catch(() => null);
   },
 
   'ticket:hold': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep artık aktif değil.')], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
     }
     if (tierOf(interaction.member) < Tier.REHBER) {
-      return interaction.reply({ embeds: [errEmbed('Bekletmeyi yalnızca yetkililer (Rehber+) kullanabilir.')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Bekletme')], ephemeral: true });
     }
     const target = ticket.status === 'pending' ? 'open' : 'pending';
     const tr = applyTransition(ticket, target);
-    if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error)], ephemeral: true });
+    if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error, 'Durum Değiştirilemedi')], ephemeral: true });
     ticketsV2.setStatus(ticket.id, target);
     addCase('ticket_status', ticket.user_id, interaction.user.id, null, `#${ticket.id} → ${target}`);
     const fresh = ticketsV2.get(ticket.id);
     await refreshTicketMessage(interaction, fresh);
     return interaction.followUp({
-      embeds: [okEmbed(target === 'pending'
-        ? `⏸️ **#${ticket.id}** beklemeye alındı.`
-        : `▶️ **#${ticket.id}** tekrar aktif.`)],
+      embeds: [target === 'pending'
+        ? warnEmbed(`**#${ticket.id}** beklemeye alındı. Yeni bir gelişme olduğunda tekrar aktif edilecek.`,
+          '⏸️ Talep Beklemede')
+        : okEmbed(`**#${ticket.id}** yeniden aktif — yetkililer talebinle ilgileniyor.`, '▶️ Talep Aktif')],
     }).catch(() => null);
   },
 
   'ticket:close2': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep zaten kapalı.')], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
     }
     return startCloseConfirm(interaction, ticket);
   },
@@ -544,34 +669,40 @@ export const ticketComponents = {
   'ticket:closeok': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep zaten kapalı.')], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
     }
     if (!canClose(interaction, ticket)) {
-      return interaction.reply({ embeds: [errEmbed('Talebi yalnızca açan kişi veya yetkililer kapatabilir.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
+        ephemeral: true,
+      });
     }
     const modal = new ModalBuilder()
       .setCustomId(`ticket:closemodal:${ticket.id}`)
-      .setTitle(`Talep #${ticket.id} — Kapatma Sebebi`.slice(0, 45))
+      .setTitle(`Talep #${ticket.id} Kapatma`.slice(0, 45))
       .addComponents(new ActionRowBuilder().addComponents(
         new TextInputBuilder().setCustomId('sebep').setLabel('Kapatma sebebi')
-          .setPlaceholder('Örn: sorun çözüldü')
+          .setPlaceholder('Örn: Sorun çözüldü')
           .setStyle(TextInputStyle.Short).setMinLength(3).setMaxLength(300).setRequired(true),
       ));
     return interaction.showModal(modal);
   },
 
   'ticket:closecancel': (interaction) => interaction.update({
-    embeds: [okEmbed('Kapatma iptal edildi — talep açık kalıyor.')],
+    embeds: [neutralEmbed('Talep açık kalmaya devam ediyor.', 'Kapatma İptal Edildi')],
     components: [],
   }),
 
   'ticket:closemodal': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [errEmbed('Bu talep zaten kapalı.')], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
     }
     if (!canClose(interaction, ticket)) {
-      return interaction.reply({ embeds: [errEmbed('Talebi yalnızca açan kişi veya yetkililer kapatabilir.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
+        ephemeral: true,
+      });
     }
     const reason = interaction.fields.getTextInputValue('sebep').trim();
     return performClose(interaction, ticket, reason);
@@ -583,25 +714,37 @@ export const ticketComponents = {
     const score = Number.parseInt(rawScore, 10);
     const ticket = Number.isInteger(id) ? ticketsV2.get(id) : null;
     if (!ticket || !(score >= 1 && score <= 5)) {
-      return interaction.reply({ embeds: [errEmbed('Bu değerlendirme artık geçerli değil.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [neutralEmbed('Bu değerlendirme artık geçerli değil.', 'Değerlendirme Kapandı')], ephemeral: true,
+      });
     }
     if (ticket.user_id !== interaction.user.id) {
-      return interaction.reply({ embeds: [errEmbed('Bu değerlendirme sana ait değil.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bu değerlendirme başka bir kullanıcının talebine ait.', 'Bu Buton Sana Ait Değil')],
+        ephemeral: true,
+      });
     }
     if (!ticketsV2.rate(id, score)) {
-      return interaction.reply({ embeds: [errEmbed('Bu talebi zaten puanladın — teşekkürler!')], ephemeral: true });
+      return interaction.reply({
+        embeds: [neutralEmbed('Bu talebi zaten puanlamıştın. Teşekkürler!', 'Değerlendirme Alınmış')], ephemeral: true,
+      });
     }
     addCase('ticket_rate', ticket.user_id, ticket.user_id, null, `#${id} → ${score}/5`);
     await sendLog(interaction.client, {
-      title: '⭐ Destek Değerlendirmesi',
+      title: 'Destek Değerlendirmesi',
       color: Colors.success,
-      description: `**#${id}** • <@${ticket.user_id}> → **${score}/5** ${'⭐'.repeat(score)}`,
+      fields: [
+        { name: 'Talep', value: `**#${id}**`, inline: true },
+        { name: 'Puan', value: `${score}/5 ${'⭐'.repeat(score)}`, inline: true },
+        { name: 'Değerlendiren', value: `<@${ticket.user_id}>`, inline: true },
+      ],
     });
     return interaction.update({
-      embeds: [okEmbed(`Teşekkürler! **#${id}** için değerlendirmen kaydedildi: **${score}/5** ${'⭐'.repeat(score)}`)],
+      embeds: [okEmbed(`**#${id}** için puanın: **${score}/5** ${'⭐'.repeat(score)}\nGeri bildirimin için teşekkürler.`,
+        '⭐ Değerlendirmen Kaydedildi')],
       components: [],
     }).catch(() => interaction.reply({
-      embeds: [okEmbed(`Teşekkürler! Değerlendirmen kaydedildi: **${score}/5**`)], ephemeral: true,
+      embeds: [okEmbed(`Puanın kaydedildi: **${score}/5**`, '⭐ Değerlendirmen Kaydedildi')], ephemeral: true,
     }));
   },
 };
@@ -656,9 +799,9 @@ export async function reconcileTickets(client) {
       addCase('ticket_close', ticket.user_id, client.user?.id ?? null,
         'kanal silinmiş (reconciliation)', `#${id}`);
       await sendLog(client, {
-        title: '🎫 Talep Otomatik Kapatıldı',
+        title: 'Talep Otomatik Kapatıldı',
         color: Colors.warn,
-        description: `**#${id}** — kanalı elle silinmiş, kayıt kapalıya çekildi (reconciliation).`,
+        description: `**#${id}** talebinin kanalı elle silinmiş; kayıt kapalıya çekildi.`,
       });
     }
     if (orphans.length) console.log(`[ticket] reconciliation: ${orphans.length} sahipsiz talep kapatıldı`);
@@ -678,11 +821,15 @@ async function slaSweep(client) {
       && slaState(ticket, now, overrides).breached) {
       ticketsV2.markSlaWarned(ticket.id);
       await sendLog(client, {
-        title: '⏰ Destek SLA Uyarısı',
+        title: 'Destek SLA Uyarısı',
         color: Colors.danger,
-        description: `**#${ticket.id}** (${PRIORITY_LABELS[ticket.priority]}) hedef sürede yanıtlanmadı!\n`
-          + `Açan: <@${ticket.user_id}> • Kanal: <#${ticket.channel_id}> • `
-          + `Hedef: ${slaState(ticket, now, overrides).targetMinutes} dk`,
+        description: 'Bu talep hedef sürede yanıtlanmadı ve hâlâ sahipsiz.',
+        fields: [
+          { name: 'Talep', value: `**#${ticket.id}** • ${PRIORITY_LABELS[ticket.priority]}`, inline: true },
+          { name: 'Açan', value: `<@${ticket.user_id}>`, inline: true },
+          { name: 'Kanal', value: `<#${ticket.channel_id}>`, inline: true },
+          { name: 'Hedef', value: `${slaState(ticket, now, overrides).targetMinutes} dk`, inline: true },
+        ],
       });
     }
     // 2) Hareketsizlik: 48 saattir mesaj yok → kanala tek seferlik hatırlatma.
@@ -695,8 +842,10 @@ async function slaSweep(client) {
           await channel.send({
             content: `<@${ticket.user_id}>`,
             embeds: [baseEmbed(Colors.warn)
-              .setTitle('⏳ Bu talepte 48 saattir hareket yok')
-              .setDescription('Sorunun çözüldüyse talebi kapatabilirsin; hâlâ yardım gerekiyorsa bir mesaj yaz.')],
+              .setTitle('⏳ Bu Talepte 48 Saattir Hareket Yok')
+              .setDescription('Sorunun çözüldüyse **Talebi Kapat** butonunu kullanabilirsin.\n'
+                + 'Hâlâ yardıma ihtiyacın varsa buraya bir mesaj yazman yeterli.')],
+            allowedMentions: mentionUsers(ticket.user_id),
           }).catch(() => null);
         }
       }

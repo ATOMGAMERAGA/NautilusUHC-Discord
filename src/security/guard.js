@@ -58,22 +58,30 @@ async function punish(guild, client, user, kind, count) {
   addGuardHit(user.id, kind, `${count} işlem / ${WINDOW_MS / 1000}sn`);
 
   const member = await guild.members.fetch(user.id).catch(() => null);
-  let action = 'işlem yapılamadı';
+  let action = 'Otomatik müdahale yapılamadı (üye bulunamadı veya yetki yetersiz)';
   if (member && member.manageable) {
     try {
       await member.roles.set([], `Patlama koruması: ${label} (${count} işlem)`);
-      action = 'tüm rolleri alındı';
+      action = 'Tüm rolleri alındı';
     } catch (err) {
-      action = `roller alınamadı: ${err.message}`;
+      console.error('[guard] roller alınamadı:', err.message);
+      action = 'Roller alınamadı — botun rol sıralamasını kontrol edin';
     }
   }
 
+  // Bu gerçekten insan müdahalesi gerektiren tek olay: Kurucu rolü bilinçli
+  // olarak etiketlenir (mesaj içeriğinde, allowedMentions ile sınırlandırılmış).
   await sendLog(client, {
-    title: '🚨 PATLAMA KORUMASI TETİKLENDİ',
+    title: 'Patlama Koruması Tetiklendi',
     color: Colors.danger,
-    description: `**Kullanıcı:** ${user} (\`${user.id}\`)\n`
-      + `**Eylem:** ${label} — ${WINDOW_MS / 1000} saniyede **${count}** işlem\n`
-      + `**Müdahale:** ${action}\n\n<@&${config.roles.kurucu}> kontrol edin!`,
+    content: config.roles.kurucu ? `<@&${config.roles.kurucu}>` : undefined,
+    pingRoles: config.roles.kurucu ? [config.roles.kurucu] : [],
+    description: 'Kısa sürede çok sayıda yıkıcı işlem algılandı ve fail durduruldu.',
+    fields: [
+      { name: 'Kullanıcı', value: `${user} (\`${user.id}\`)`, inline: true },
+      { name: 'Eylem', value: `${label} — ${WINDOW_MS / 1000} sn içinde ${count} işlem`, inline: true },
+      { name: 'Müdahale', value: action, inline: false },
+    ],
   });
 }
 
@@ -129,10 +137,13 @@ export function registerGuard(client) {
     addGuardHit(adder?.id ?? 'unknown', 'botAdd', member.id);
     await member.kick('Patlama koruması: izinsiz bot ekleme').catch(() => null);
     await sendLog(client, {
-      title: '🚨 İzinsiz Bot Eklendi',
+      title: 'İzinsiz Bot Eklendi',
       color: Colors.danger,
-      description: `**Bot:** ${member.user.tag} (\`${member.id}\`) — atıldı.\n`
-        + `**Ekleyen:** ${adder ? `${adder} (\`${adder.id}\`)` : 'bilinmiyor'}`,
+      description: 'Kurucu dışında biri sunucuya bot ekledi; bot anında çıkarıldı.',
+      fields: [
+        { name: 'Bot', value: `${member.user.tag} (\`${member.id}\`)`, inline: true },
+        { name: 'Ekleyen', value: adder ? `${adder} (\`${adder.id}\`)` : 'Bilinmiyor', inline: true },
+      ],
     });
   });
 }

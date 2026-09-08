@@ -11,14 +11,41 @@
 /* Talep türleri                                                       */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Talep türleri. `desc` panel menüsünde, `subjectHint`/`extraHint` ise modal
+ * yer tutucularında görünür — kullanıcı ne yazacağını örnekten anlar.
+ */
 export const TICKET_TYPES = {
-  genel: { label: 'Genel Destek', emoji: '🎫', desc: 'Genel sorular ve yardım' },
-  hesap: { label: 'Hesap Bağlantısı', emoji: '🔗', desc: 'Minecraft hesap bağlama sorunları' },
-  sikayet: { label: 'Oyuncu Şikâyeti', emoji: '🚨', desc: 'Kural ihlali bildirimi', extraField: 'Oyuncu adı / ceza no' },
-  itiraz: { label: 'Ceza İtirazı', emoji: '⚖️', desc: 'Ban / mute itirazı', extraField: 'Oyuncu adı / ceza no' },
-  teknik: { label: 'Teknik Sorun', emoji: '🔧', desc: 'Bağlantı, bot veya sunucu sorunu' },
-  magaza: { label: 'Mağaza / Ödeme', emoji: '💳', desc: 'Satın alma ve ödeme sorunları' },
-  diger: { label: 'Diğer', emoji: '💬', desc: 'Listede olmayan bir konu' },
+  genel: {
+    label: 'Genel Destek', emoji: '🎫', desc: 'Sorular ve diğer yardım talepleri',
+    subjectHint: 'Örn: Maça nasıl katılırım?',
+  },
+  hesap: {
+    label: 'Hesap Bağlantısı', emoji: '🔗', desc: 'Minecraft hesabını bağlarken yaşanan sorunlar',
+    subjectHint: 'Örn: Bağlantı kodum çalışmıyor',
+  },
+  sikayet: {
+    label: 'Oyuncu Şikâyeti', emoji: '🚨', desc: 'Kural ihlali bildir',
+    extraField: 'Şikâyet edilen oyuncu', extraHint: 'Örn: Atom',
+    subjectHint: 'Örn: Maçta takım ihlali',
+  },
+  itiraz: {
+    label: 'Ceza İtirazı', emoji: '⚖️', desc: 'Aldığın ban veya susturmaya itiraz et',
+    extraField: 'Oyuncu adı / ceza no', extraHint: 'Örn: Atom veya #124',
+    subjectHint: 'Örn: Haksız ban itirazı',
+  },
+  teknik: {
+    label: 'Teknik Sorun', emoji: '🔧', desc: 'Bağlantı, bot veya sunucu kaynaklı sorunlar',
+    subjectHint: 'Örn: Sunucuya bağlanamıyorum',
+  },
+  magaza: {
+    label: 'Mağaza / Ödeme', emoji: '💳', desc: 'Satın alma ve ödeme sorunları',
+    subjectHint: 'Örn: Ödemem hesabıma geçmedi',
+  },
+  diger: {
+    label: 'Diğer', emoji: '💬', desc: 'Listede olmayan bir konu',
+    subjectHint: 'Konuyu tek cümleyle özetle',
+  },
 };
 
 export function ticketTypeLabel(type) {
@@ -218,7 +245,8 @@ export function checkOpenAllowed({
     return {
       ok: false,
       reason: 'blacklist',
-      message: 'Destek sistemini kullanman engellenmiş. Bunun bir hata olduğunu düşünüyorsan bir yetkiliyle iletişime geç.',
+      message: 'Destek sistemine erişimin kapatılmış durumda.\n'
+        + 'Bunun bir yanlışlık olduğunu düşünüyorsan sunucudaki bir yetkiliye ulaş.',
     };
   }
   const effectiveMax = Number.isFinite(maxOpen) && maxOpen > 0 ? maxOpen : DEFAULT_MAX_OPEN;
@@ -227,7 +255,7 @@ export function checkOpenAllowed({
       ok: false,
       reason: 'limit',
       message: effectiveMax === 1
-        ? 'Zaten açık bir destek talebin var. Yenisini açmadan önce onu kapatmalısın.'
+        ? 'Zaten açık bir destek talebin var. Yeni bir tane açmadan önce onu kapatman gerekiyor.'
         : `Aynı anda en fazla **${effectiveMax}** açık destek talebin olabilir.`,
     };
   }
@@ -242,7 +270,7 @@ export function checkOpenAllowed({
         ok: false,
         reason: 'cooldown',
         retryInMs,
-        message: `Çok sık talep açıyorsun. Lütfen **${mins} dakika** sonra tekrar dene.`,
+        message: `Yeni bir talep açmak için **${mins} dakika** beklemen gerekiyor.`,
       };
     }
   }

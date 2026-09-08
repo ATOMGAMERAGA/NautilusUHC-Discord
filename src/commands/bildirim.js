@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { baseEmbed, Colors } from '../embeds.js';
+import { baseEmbed, brandFooter, Colors } from '../embeds.js';
 import { dmSubscriptions } from '../db.js';
 import { CONFIRM_TTL_MS } from '../matchdm.js';
 
@@ -18,20 +18,25 @@ export { CONFIRM_TTL_MS };
 export function statusEmbed(userId) {
   const enabled = dmSubscriptions.isEnabled(userId);
   const { last_error: lastError, last_error_at: lastErrorAt } = dmSubscriptions.lastError(userId);
-  const e = baseEmbed(enabled ? Colors.success : Colors.info)
-    .setTitle('🔔 Maç Bildirimi (DM)')
-    .setDescription(
-      'Normal bir Nautilus UHC maçı başladığında, maçlar kanalındaki duyurunun '
-      + 'bir kopyasını sana DM olarak gönderir. **Test maçları bu bildirime dahil değildir.**\n\n'
-      + `Mevcut durum: ${enabled ? '🟢 **AÇIK**' : '🔴 **KAPALI**'}`,
-    );
+  const e = baseEmbed(enabled ? Colors.success : Colors.neutral)
+    .setTitle(enabled ? '🔔 Maç Bildirimin Açık' : '🔕 Maç Bildirimin Kapalı')
+    .setDescription(enabled
+      ? 'Normal bir maç başladığında duyurunun kopyası sana DM olarak geliyor.'
+      : 'Şu anda maç başlangıcında DM almıyorsun.')
+    .addFields({
+      name: 'Nasıl çalışır',
+      value: 'Bildirim yalnız **normal maçlarda** gönderilir, test maçları dahil değildir.\n'
+        + 'Aboneliğin kişiseldir ve kimseyle paylaşılmaz.',
+    })
+    .setFooter(brandFooter('Değişiklik için aşağıdaki butonu kullan'));
   if (enabled && lastError) {
     e.addFields({
-      name: '⚠️ Son teslimat sorunu',
-      value: `Son bildirim sana ulaştırılamadı: \`${lastError}\`\n`
-        + 'DM ayarlarının bu sunucudan mesaj almaya izin verdiğinden emin ol '
-        + `(<t:${Math.floor((lastErrorAt ?? Date.now()) / 1000)}:R>).`,
+      name: 'Son bildirim ulaşmadı',
+      value: 'Bir önceki duyuru sana iletilemedi '
+        + `(<t:${Math.floor((lastErrorAt ?? Date.now()) / 1000)}:R>).\n`
+        + 'Sunucu gizlilik ayarlarından "Sunucu üyelerinden özel mesaj" iznini açman gerekiyor olabilir.',
     });
+    console.warn(`[maç-bildirim] ${userId} teslimat hatası: ${lastError}`);
   }
   return e;
 }
@@ -41,11 +46,11 @@ export function actionRow(userId, enabled, now = Date.now()) {
   if (enabled) {
     row.addComponents(new ButtonBuilder()
       .setCustomId(`bildirim:kapat:${userId}:${now}`)
-      .setLabel('Kapat').setEmoji('🔕').setStyle(ButtonStyle.Danger));
+      .setLabel('Bildirimleri Kapat').setEmoji('🔕').setStyle(ButtonStyle.Danger));
   } else {
     row.addComponents(new ButtonBuilder()
       .setCustomId(`bildirim:ac:${userId}:${now}`)
-      .setLabel('Aç').setEmoji('🔔').setStyle(ButtonStyle.Success));
+      .setLabel('Bildirimleri Aç').setEmoji('🔔').setStyle(ButtonStyle.Success));
   }
   row.addComponents(new ButtonBuilder()
     .setCustomId(`bildirim:vazgec:${userId}:${now}`)
@@ -58,7 +63,7 @@ export default [
     tier: Tier.MEMBER,
     data: new SlashCommandBuilder()
       .setName('maç-bildirim')
-      .setDescription('Maç başlangıcında kişisel DM bildirimini aç/kapat (onaylı)'),
+      .setDescription('Maç başlangıcı DM bildirimini açar veya kapatır'),
     async execute(interaction) {
       const userId = interaction.user.id;
       const enabled = dmSubscriptions.isEnabled(userId);

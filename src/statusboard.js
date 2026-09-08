@@ -1,6 +1,7 @@
 import { getSetting, setSetting } from './db.js';
 import { mcapi } from './mcapi.js';
 import { statusBoardEmbed } from './liveembeds.js';
+import { Brand } from './embeds.js';
 
 /**
  * Oto-güncellenen durum panosu + bot presence'ı.
@@ -26,14 +27,18 @@ export function shouldEdit(newHash, prevHash) {
   return newHash !== prevHash;
 }
 
-/** Presence satırı: maç varsa canlı sayaç, yoksa oyuncu sayısı. */
+/**
+ * Bot durumu (presence): maç varsa canlı sayaç, yoksa oyuncu sayısı, köprü
+ * kapalıysa yalnız sunucu adresi. Tek satır olduğu için en değerli bilgi öne
+ * yazılır ve ayraç tüm botta olduğu gibi "•" kullanır.
+ */
 export function presenceLine(status) {
   const match = status?.ok ? status.match : null;
   if (match?.active) {
-    return `⚔️ ${match.aliveCount ?? '?'}/${match.participantCount ?? '?'} — ${match.state ?? 'maç'}`;
+    return `⚔️ ${match.aliveCount ?? '?'}/${match.participantCount ?? '?'} hayatta — ${match.state ?? 'maç'}`;
   }
   const count = status?.ok ? (status.count ?? 0) : null;
-  return count != null ? `🎮 ${count} oyuncu | nautilusuhc.com` : 'nautilusuhc.com';
+  return count != null ? `🎮 ${count} oyuncu • ${Brand.domain}` : Brand.domain;
 }
 
 const state = { lastHash: null, lastPresence: null, lastPresenceAt: 0 };

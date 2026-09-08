@@ -1,20 +1,24 @@
 import {
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, PermissionFlagsBits,
 } from 'discord.js';
-import { okEmbed, errEmbed } from './embeds.js';
+import {
+  okEmbed, errEmbed, warnEmbed, neutralEmbed, bridgeErrorEmbed, Colors,
+} from './embeds.js';
 import { mcapi } from './mcapi.js';
 import { addCase, giveaways, polls, dmSubscriptions } from './db.js';
 import { confirmDecision } from './matchdm.js';
-import { clean } from './util.js';
+import { clean, codeText } from './util.js';
 import { sendLog } from './modlog.js';
-import { Colors } from './embeds.js';
 import { ticketComponents } from './tickets.js';
 import { buildLivePayload } from './commands/mac.js';
 import { syncMemberTierRole, roleMap } from './rolesync.js';
 
 /**
- * Component (button / modal) handlers, keyed by customId prefix. The link flow:
- * panel button → code modal → plugin verifies the code and creates the link.
+ * Component (button / modal) handlers, keyed by customId prefix.
+ *
+ * customId'ler köprü/panel sözleşmesinin parçasıdır ve DEĞİŞTİRİLMEZ; yalnız
+ * kullanıcıya görünen metin, renk ve akış geri bildirimi tasarlanır.
+ * Hesap bağlama akışı: panel butonu → kod modalı → plugin doğrular → bağlantı.
  */
 export const componentHandlers = {
   'link:open': async (interaction) => {
@@ -25,7 +29,7 @@ export const componentHandlers = {
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
             .setCustomId('code')
-            .setLabel('Oyun içi /link kodunu gir')
+            .setLabel('Bağlantı Kodu')
             .setPlaceholder('Örn: A1B2C3')
             .setStyle(TextInputStyle.Short)
             .setMinLength(4)
@@ -43,24 +47,38 @@ export const componentHandlers = {
     const status = await mcapi.linkStatus(`discord=${interaction.user.id}`);
     if (status.ok && status.linked) {
       return interaction.editReply({
-        embeds: [errEmbed(`Hesabın zaten **${clean(status.mc, 30)}** ile bağlı. `
-          + 'Bir yanlışlık olduğunu düşünüyorsan destek talebi aç.')],
+        embeds: [warnEmbed(
+          `Discord hesabın zaten **${clean(status.mc, 30)}** ile eşleşmiş durumda.\n`
+          + 'Bağlantıyı değiştirmen gerekiyorsa `/destek aç` ile talep oluştur.',
+          'Hesabın Zaten Bağlı',
+        )],
       });
     }
 
     const res = await mcapi.linkVerify(code, interaction.user.id, interaction.user.tag);
     if (!res.ok) {
-      const msg = res.status === 404 || /invalid|geçersiz/i.test(res.error ?? '')
-        ? 'Kod geçersiz veya süresi dolmuş. Oyun içinde tekrar `/link` yazıp yeni kod al.'
-        : res.error;
-      return interaction.editReply({ embeds: [errEmbed(`❌ ${msg}`)] });
+      // Kodun geçersiz olması normal bir kullanıcı hatasıdır: ne olduğunu ve
+      // nasıl düzelteceğini söyleriz. Diğer her şey sınıflandırılmış köprü
+      // hatasına düşer — ham backend metni kullanıcıya gösterilmez.
+      const badCode = res.status === 404 || res.status === 400
+        || /invalid|expired|geçersiz|süresi/i.test(res.error ?? '');
+      return interaction.editReply({
+        embeds: [badCode
+          ? errEmbed('Girdiğin kod geçersiz veya süresi dolmuş.\n'
+            + 'Minecraft sunucusunda `/link` yazarak yeni bir kod al ve tekrar dene.',
+          'Kod Doğrulanamadı')
+          : bridgeErrorEmbed(res, { context: 'hesap bağlama' })],
+      });
     }
 
     addCase('link_create', interaction.user.id, interaction.user.id, null, res.mc);
     await sendLog(interaction.client, {
-      title: '🔗 Hesap Bağlandı',
+      title: 'Hesap Bağlandı',
       color: Colors.success,
-      description: `${interaction.user} ↔ \`${clean(res.mc, 30)}\``,
+      fields: [
+        { name: 'Kullanıcı', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: true },
+        { name: 'Minecraft', value: `\`${codeText(res.mc, 30)}\``, inline: true },
+      ],
     });
     // ELO tier rolünü hemen ver (best-effort; rol eşlemesi kuruluysa).
     if (interaction.guild && Object.keys(roleMap()).length) {
@@ -72,8 +90,11 @@ export const componentHandlers = {
       } catch { /* rol senkronu link akışını asla bozmaz */ }
     }
     return interaction.editReply({
-      embeds: [okEmbed(`✅ Hesabın **${clean(res.mc, 30)}** Minecraft hesabına bağlandı!\n`
-        + 'Artık maçlara katılabilirsin. İyi oyunlar! 🌊')],
+      embeds: [okEmbed(
+        `Minecraft hesabın **${clean(res.mc, 30)}** ile eşleştirildi.\n`
+        + 'Artık Nautilus maçlarına katılabilir, profilini `/profil` ile görebilirsin.',
+        '🔗 Hesap Bağlandı',
+      )],
     });
   },
 
@@ -104,10 +125,10 @@ export const componentHandlers = {
   'bildirim:vazgec': async (interaction) => {
     const d = confirmDecision(interaction.customId, interaction.user.id);
     if (d === 'not_owner') {
-      return interaction.reply({ embeds: [errEmbed('Bu buton sana ait değil.')], ephemeral: true });
+      return interaction.reply({ embeds: [notYours()], ephemeral: true });
     }
     return interaction.update({
-      embeds: [okEmbed('Değişiklik yapılmadı.')],
+      embeds: [neutralEmbed('Bildirim ayarın olduğu gibi kaldı.', 'Değişiklik Yapılmadı')],
       components: [],
     });
   },
@@ -122,14 +143,17 @@ export const componentHandlers = {
     const id = Number.parseInt(interaction.customId.split(':')[2], 10);
     const gw = giveaways.get(id);
     if (!gw || gw.ended) {
-      return interaction.reply({ embeds: [errEmbed('Bu çekiliş sona ermiş.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [neutralEmbed('Bu çekiliş sona erdi. Sonuçlar çekiliş mesajında görünüyor.', 'Çekiliş Kapandı')],
+        ephemeral: true,
+      });
     }
     const joined = giveaways.enter(id, interaction.user.id);
     const count = giveaways.entries(id).length;
     return interaction.reply({
       embeds: [joined
-        ? okEmbed(`🎉 Çekilişe katıldın! Şu anki katılımcı: **${count}**`)
-        : errEmbed(`Bu çekilişe zaten katılmışsın. (Katılımcı: ${count})`)],
+        ? okEmbed(`Çekilişe katıldın. Şu anki katılımcı sayısı: **${count}**.`, '🎉 Katılım Alındı')
+        : neutralEmbed(`Bu çekilişe zaten katıldın. Katılımcı sayısı: **${count}**.`, 'Zaten Katıldın')],
       ephemeral: true,
     });
   },
@@ -142,7 +166,10 @@ export const componentHandlers = {
     const choice = Number.parseInt(rawChoice, 10);
     const poll = polls.get(id);
     if (!poll || poll.ended || !poll.options[choice]) {
-      return interaction.reply({ embeds: [errEmbed('Bu anket sona ermiş.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [neutralEmbed('Bu anket sona erdi. Sonuçlar anket mesajında görünüyor.', 'Anket Kapandı')],
+        ephemeral: true,
+      });
     }
     polls.vote(id, interaction.user.id, choice);
     // Canlı sonuçları ankete işle (best-effort).
@@ -157,7 +184,8 @@ export const componentHandlers = {
       /* mesaj düzenlenemedi — oy yine de kayıtlı */
     }
     return interaction.reply({
-      embeds: [okEmbed(`🗳️ Oyun kaydedildi: **${clean(poll.options[choice], 60)}**`)],
+      embeds: [okEmbed(`Oyun **${clean(poll.options[choice], 60)}** seçeneğine kaydedildi.\n`
+        + 'Fikrini değiştirirsen başka bir seçeneğe tıklaman yeterli.', '🗳️ Oyun Alındı')],
       ephemeral: true,
     });
   },
@@ -168,7 +196,11 @@ export const componentHandlers = {
     const roleId = interaction.customId.split(':')[1];
     const role = interaction.guild.roles.cache.get(roleId);
     if (!role) {
-      return interaction.reply({ embeds: [errEmbed('Bu rol artık mevcut değil.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bu rol artık sunucuda mevcut değil. Panelin güncellenmesi için bir yetkiliye haber ver.',
+          'Rol Bulunamadı')],
+        ephemeral: true,
+      });
     }
     const me = interaction.guild.members.me;
     const dangerous = role.permissions.any([
@@ -177,19 +209,33 @@ export const componentHandlers = {
       PermissionFlagsBits.ModerateMembers,
     ]);
     if (role.managed || dangerous || role.position >= me.roles.highest.position) {
-      return interaction.reply({ embeds: [errEmbed('Bu rol panelden alınamaz.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bu rol panel üzerinden dağıtılamıyor.', 'Rol Alınamaz')],
+        ephemeral: true,
+      });
     }
     const member = interaction.member;
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(role, 'Rol paneli');
-      return interaction.reply({ embeds: [okEmbed(`➖ ${role} rolü kaldırıldı.`)], ephemeral: true });
+      return interaction.reply({
+        embeds: [okEmbed(`${role} rolü üzerinden kaldırıldı. Butona tekrar tıklayarak geri alabilirsin.`, 'Rol Kaldırıldı')],
+        ephemeral: true,
+      });
     }
     await member.roles.add(role, 'Rol paneli');
-    return interaction.reply({ embeds: [okEmbed(`➕ ${role} rolü verildi.`)], ephemeral: true });
+    return interaction.reply({
+      embeds: [okEmbed(`${role} rolü hesabına eklendi. Butona tekrar tıklayarak bırakabilirsin.`, 'Rol Verildi')],
+      ephemeral: true,
+    });
   },
 };
 
-/** Finds the handler whose key matches the interaction's customId prefix. */
+/** Başkasının butonuna tıklandığında verilen tek tip yanıt. */
+function notYours() {
+  return errEmbed('Bu buton başka bir kullanıcı için oluşturuldu. Komutu kendin çalıştırabilirsin.',
+    'Bu Buton Sana Ait Değil');
+}
+
 /**
  * /maç-bildirim onay butonu: yalnız komut sahibi, TTL içinde. Değişiklik
  * ancak bu açık onayla uygulanır; sonuç ephemeral güncellenir.
@@ -197,24 +243,27 @@ export const componentHandlers = {
 async function handleBildirimToggle(interaction, enable) {
   const d = confirmDecision(interaction.customId, interaction.user.id);
   if (d === 'not_owner') {
-    return interaction.reply({ embeds: [errEmbed('Bu buton sana ait değil.')], ephemeral: true });
+    return interaction.reply({ embeds: [notYours()], ephemeral: true });
   }
   if (d === 'expired') {
     return interaction.update({
-      embeds: [errEmbed('Bu onayın süresi doldu. Lütfen `/maç-bildirim` komutunu yeniden kullan.')],
+      embeds: [warnEmbed('Onay penceresi kapandı, ayarın değişmedi.\n'
+        + 'Değişiklik için `/maç-bildirim` komutunu tekrar çalıştır.', 'Onay Süresi Doldu')],
       components: [],
     });
   }
   dmSubscriptions.set(d.ownerId, enable);
   return interaction.update({
-    embeds: [okEmbed(enable
-      ? '🔔 Maç bildirimi **açıldı**. Normal bir maç başladığında duyurunun kopyası DM olarak gelecek. '
-        + '(Test maçları dahil değildir.) İstediğin zaman `/maç-bildirim` ile kapatabilirsin.'
-      : '🔕 Maç bildirimi **kapatıldı**. Artık maç başlangıcında DM almayacaksın.')],
+    embeds: [enable
+      ? okEmbed('Bir sonraki normal maç başladığında duyurunun kopyası DM olarak sana gelecek.\n'
+        + 'Test maçları bu bildirime dahil değildir.', '🔔 Bildirimler Açık')
+      : neutralEmbed('Maç başlangıcında artık DM almayacaksın.\n'
+        + 'İstediğin zaman `/maç-bildirim` ile geri açabilirsin.', '🔕 Bildirimler Kapalı')],
     components: [],
   });
 }
 
+/** Finds the handler whose key matches the interaction's customId prefix. */
 export function resolveComponent(customId) {
   for (const [prefix, handler] of Object.entries(componentHandlers)) {
     if (customId === prefix || customId.startsWith(`${prefix}:`)) return handler;

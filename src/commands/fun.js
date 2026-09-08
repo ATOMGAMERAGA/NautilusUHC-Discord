@@ -2,7 +2,7 @@ import {
   SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { okEmbed, errEmbed, baseEmbed, Colors } from '../embeds.js';
+import { okEmbed, errEmbed, baseEmbed, neutralEmbed, brandFooter, Colors } from '../embeds.js';
 import { giveaways, polls, scheduleTask, addCase } from '../db.js';
 import { endGiveaway, endPoll, pollResultEmbed } from '../scheduler.js';
 import { parseDuration, formatDuration, discordTime, clean } from '../util.js';
@@ -14,7 +14,7 @@ export default [
     tier: Tier.MOD,
     data: new SlashCommandBuilder()
       .setName('çekiliş')
-      .setDescription('Çekiliş yönetimi')
+      .setDescription('Çekiliş başlatır ve yönetir')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addSubcommand((s) => s.setName('başlat').setDescription('Yeni bir çekiliş başlatır')
         .addStringOption((o) => o.setName('süre').setDescription('Örn: 30dk, 2sa, 1g').setRequired(true))
@@ -31,48 +31,79 @@ export default [
       if (sub === 'başlat') {
         const durationMs = parseDuration(interaction.options.getString('süre', true));
         if (!durationMs) {
-          return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `30dk`, `2sa`, `1g`.')], ephemeral: true });
+          return interaction.reply({
+            embeds: [errEmbed('Süreyi anlayamadım. Örnek: `30dk`, `2sa`, `1g`.', 'Geçersiz Süre')],
+            ephemeral: true,
+          });
         }
         const prize = interaction.options.getString('ödül', true);
         const winnerCount = interaction.options.getInteger('kazanan') ?? 1;
         const endsAt = Date.now() + durationMs;
 
         const id = giveaways.create(interaction.channel.id, prize, winnerCount, endsAt, interaction.user.id);
-        const embed = baseEmbed(Colors.main)
-          .setTitle(`🎉 ÇEKİLİŞ — ${clean(prize, 100)}`)
-          .setDescription(`Katılmak için 🎉 butonuna tıkla!\n\n`
-            + `**Bitiş:** ${discordTime(endsAt, 'R')} (${discordTime(endsAt, 'f')})\n`
-            + `**Kazanan sayısı:** ${winnerCount}\n**Başlatan:** ${interaction.user}`)
-          .setFooter({ text: `Çekiliş #${id} • Nautilus PvP` });
+        const embed = baseEmbed(Colors.brand)
+          .setTitle(`🎉 Çekiliş — ${clean(prize, 100)}`)
+          .setDescription(`Katılmak için aşağıdaki butona tıkla. Kazananlar ${discordTime(endsAt, 'R')} açıklanacak.`)
+          .addFields(
+            { name: 'Ödül', value: clean(prize, 200), inline: true },
+            { name: 'Kazanan sayısı', value: String(winnerCount), inline: true },
+            { name: 'Bitiş', value: discordTime(endsAt, 'f'), inline: true },
+            { name: 'Düzenleyen', value: `${interaction.user}`, inline: true },
+          )
+          .setFooter(brandFooter(`Çekiliş #${id}`))
+          .setTimestamp();
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`gw:join:${id}`).setEmoji('🎉')
             .setLabel('Katıl').setStyle(ButtonStyle.Primary),
         );
-        const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
+        const msg = await interaction.channel.send({
+          embeds: [embed], components: [row], allowedMentions: { parse: [] },
+        });
         giveaways.setMessage(id, msg.id);
         scheduleTask('giveaway_end', endsAt, { giveawayId: id });
         addCase('giveaway', null, interaction.user.id, prize, `#${id} / ${formatDuration(durationMs)}`);
-        return interaction.reply({ embeds: [okEmbed(`🎉 **#${id}** numaralı çekiliş başlatıldı!`)], ephemeral: true });
+        return interaction.reply({
+          embeds: [okEmbed(`**#${id}** numaralı çekiliş bu kanalda yayında. Kazananlar ${discordTime(endsAt, 'R')} otomatik çekilecek.`,
+            '🎉 Çekiliş Başladı')],
+          ephemeral: true,
+        });
       }
 
       const id = interaction.options.getInteger('çekiliş-no', true);
       const gw = giveaways.get(id);
-      if (!gw) return interaction.reply({ embeds: [errEmbed(`#${id} numaralı çekiliş bulunamadı.`)], ephemeral: true });
+      if (!gw) {
+        return interaction.reply({
+          embeds: [errEmbed(`**#${id}** numaralı bir çekiliş yok.`, 'Çekiliş Bulunamadı')],
+          ephemeral: true,
+        });
+      }
 
       if (sub === 'bitir') {
-        if (gw.ended) return interaction.reply({ embeds: [errEmbed('Bu çekiliş zaten bitmiş.')], ephemeral: true });
+        if (gw.ended) {
+          return interaction.reply({
+            embeds: [neutralEmbed('Bu çekiliş zaten sonuçlandı.', 'Çekiliş Kapalı')], ephemeral: true,
+          });
+        }
         await interaction.deferReply({ ephemeral: true });
         await endGiveaway(interaction.client, id);
-        return interaction.editReply({ embeds: [okEmbed(`🎉 #${id} çekilişi bitirildi.`)] });
+        return interaction.editReply({
+          embeds: [okEmbed(`**#${id}** çekilişi erken bitirildi ve kazananlar duyuruldu.`, '🎉 Çekiliş Sonuçlandı')],
+        });
       }
 
       // yenidençek
-      if (!gw.ended) return interaction.reply({ embeds: [errEmbed('Çekiliş henüz bitmedi.')], ephemeral: true });
+      if (!gw.ended) {
+        return interaction.reply({
+          embeds: [errEmbed('Bu çekiliş hâlâ devam ediyor. Önce `/çekiliş bitir` kullan.', 'Çekiliş Sürüyor')],
+          ephemeral: true,
+        });
+      }
       await interaction.deferReply({ ephemeral: true });
       const winners = await endGiveaway(interaction.client, id, { reroll: true });
       return interaction.editReply({
-        embeds: [okEmbed(winners?.length ? `🎲 Yeniden çekildi: ${winners.map((w) => `<@${w}>`).join(', ')}`
-          : 'Katılımcı olmadığı için kazanan çekilemedi.')],
+        embeds: [winners?.length
+          ? okEmbed(`Yeni kazanan: ${winners.map((w) => `<@${w}>`).join(', ')}`, '🎲 Yeniden Çekildi')
+          : neutralEmbed('Çekilişe kimse katılmadığı için kazanan belirlenemedi.', 'Katılımcı Yok')],
       });
     },
   },
@@ -81,7 +112,7 @@ export default [
     tier: Tier.REHBER,
     data: new SlashCommandBuilder()
       .setName('anket')
-      .setDescription('Anket yönetimi')
+      .setDescription('Anket başlatır ve yönetir')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addSubcommand((s) => s.setName('başlat').setDescription('Butonlu anket başlatır')
         .addStringOption((o) => o.setName('soru').setDescription('Anket sorusu').setRequired(true))
@@ -98,13 +129,22 @@ export default [
         const options = interaction.options.getString('seçenekler', true)
           .split(';').map((s) => s.trim()).filter(Boolean).slice(0, MAX_POLL_OPTIONS);
         if (options.length < 2) {
-          return interaction.reply({ embeds: [errEmbed('En az 2 seçenek gerekli (`;` ile ayır).')], ephemeral: true });
+          return interaction.reply({
+            embeds: [errEmbed('Anket için en az 2 seçenek gerekiyor. Seçenekleri `;` ile ayır.\n'
+              + 'Örnek: `Evet;Hayır;Kararsızım`', 'Seçenekler Eksik')],
+            ephemeral: true,
+          });
         }
         const rawDuration = interaction.options.getString('süre');
         let endsAt = null;
         if (rawDuration) {
           const ms = parseDuration(rawDuration);
-          if (!ms) return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `1sa`, `1g`.')], ephemeral: true });
+          if (!ms) {
+            return interaction.reply({
+              embeds: [errEmbed('Süreyi anlayamadım. Örnek: `1sa`, `1g`.', 'Geçersiz Süre')],
+              ephemeral: true,
+            });
+          }
           endsAt = Date.now() + ms;
         }
 
@@ -112,27 +152,44 @@ export default [
         const embed = baseEmbed(Colors.info)
           .setTitle(`📊 ${clean(question, 200)}`)
           .setDescription(options.map((o, i) => `**${i + 1}.** ${clean(o, 80)}`).join('\n')
-            + (endsAt ? `\n\nBitiş: ${discordTime(endsAt, 'R')}` : ''))
-          .setFooter({ text: `Anket #${id} • Oy vermek için butonları kullan` });
+            + (endsAt ? `\n\nOylama ${discordTime(endsAt, 'R')} kapanıyor.` : ''))
+          .setFooter(brandFooter(`Anket #${id}`, 'Oy vermek için numaralara tıkla'));
         const row = new ActionRowBuilder().addComponents(
           options.map((o, i) => new ButtonBuilder()
             .setCustomId(`poll:vote:${id}:${i}`)
             .setLabel(`${i + 1}`)
             .setStyle(ButtonStyle.Secondary)),
         );
-        const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
+        const msg = await interaction.channel.send({
+          embeds: [embed], components: [row], allowedMentions: { parse: [] },
+        });
         polls.setMessage(id, msg.id);
         if (endsAt) scheduleTask('poll_end', endsAt, { pollId: id });
-        return interaction.reply({ embeds: [okEmbed(`📊 **#${id}** numaralı anket başlatıldı.`)], ephemeral: true });
+        return interaction.reply({
+          embeds: [okEmbed(`**#${id}** numaralı anket bu kanalda yayında.`
+            + (endsAt ? ` Sonuçlar ${discordTime(endsAt, 'R')} otomatik açıklanacak.` : ' Bitirmek için `/anket bitir` kullan.'),
+          '📊 Anket Başladı')],
+          ephemeral: true,
+        });
       }
 
       const id = interaction.options.getInteger('anket-no', true);
       const poll = polls.get(id);
-      if (!poll) return interaction.reply({ embeds: [errEmbed(`#${id} numaralı anket bulunamadı.`)], ephemeral: true });
-      if (poll.ended) return interaction.reply({ embeds: [errEmbed('Bu anket zaten bitmiş.')], ephemeral: true });
+      if (!poll) {
+        return interaction.reply({
+          embeds: [errEmbed(`**#${id}** numaralı bir anket yok.`, 'Anket Bulunamadı')], ephemeral: true,
+        });
+      }
+      if (poll.ended) {
+        return interaction.reply({
+          embeds: [neutralEmbed('Bu anket zaten sonuçlandı.', 'Anket Kapalı')], ephemeral: true,
+        });
+      }
       await interaction.deferReply({ ephemeral: true });
       await endPoll(interaction.client, id);
-      return interaction.editReply({ embeds: [okEmbed(`📊 #${id} anketi bitirildi, sonuçlar yayınlandı.`)] });
+      return interaction.editReply({
+        embeds: [okEmbed(`**#${id}** anketi kapatıldı, sonuçlar anket mesajında yayınlandı.`, '📊 Anket Bitti')],
+      });
     },
   },
 
@@ -140,14 +197,22 @@ export default [
     tier: Tier.MEMBER,
     data: new SlashCommandBuilder()
       .setName('hatırlat')
-      .setDescription('Belirtilen süre sonra seni bu kanalda etiketleyerek hatırlatır')
+      .setDescription('Belirttiğin süre sonra bu kanalda seni etiketleyerek hatırlatır')
       .addStringOption((o) => o.setName('süre').setDescription('Örn: 10dk, 2sa, 1g').setRequired(true))
-      .addStringOption((o) => o.setName('mesaj').setDescription('Hatırlatılacak şey').setRequired(true)),
+      .addStringOption((o) => o.setName('mesaj').setDescription('Hatırlatılacak not').setRequired(true)),
     async execute(interaction) {
       const ms = parseDuration(interaction.options.getString('süre', true));
-      if (!ms) return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `10dk`, `2sa`, `1g`.')], ephemeral: true });
+      if (!ms) {
+        return interaction.reply({
+          embeds: [errEmbed('Süreyi anlayamadım. Örnek: `10dk`, `2sa`, `1g`.', 'Geçersiz Süre')],
+          ephemeral: true,
+        });
+      }
       if (ms > 30 * 86_400_000) {
-        return interaction.reply({ embeds: [errEmbed('En fazla 30 gün sonrası için hatırlatıcı kurabilirsin.')], ephemeral: true });
+        return interaction.reply({
+          embeds: [errEmbed('Hatırlatıcı en fazla 30 gün sonrasına kurulabilir.', 'Süre Çok Uzun')],
+          ephemeral: true,
+        });
       }
       const message = interaction.options.getString('mesaj', true);
       const dueAt = Date.now() + ms;
@@ -157,7 +222,8 @@ export default [
         message,
       });
       return interaction.reply({
-        embeds: [okEmbed(`⏰ Tamamdır! ${discordTime(dueAt, 'R')} (${discordTime(dueAt, 'f')}) hatırlatacağım:\n> ${clean(message, 200)}`)],
+        embeds: [okEmbed(`${discordTime(dueAt, 'R')} bu kanalda seni etiketleyeceğim.\n> ${clean(message, 200)}`,
+          '⏰ Hatırlatıcı Kuruldu')],
         ephemeral: true,
       });
     },

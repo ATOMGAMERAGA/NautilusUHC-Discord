@@ -34,15 +34,19 @@ const ACTIVE_STATUS = {
   },
 };
 
-test('liveMatchEmbed: ulaşılamıyor → hata embed\'i', () => {
-  const e = liveMatchEmbed({ ok: false, error: 'zaman aşımı' });
-  assert.match(e.data.description, /zaman aşımı/);
+test('liveMatchEmbed: ulaşılamıyor → sınıflandırılmış hata, ham metin sızmaz', () => {
+  const e = liveMatchEmbed({ ok: false, error: 'fetch failed ECONNRESET 10.0.0.4:25000' });
+  assert.match(e.data.title, /Ulaşılamıyor/);
+  assert.match(e.data.description, /yanıt vermiyor/);
+  assert.doesNotMatch(e.data.description, /ECONNRESET|fetch|25000/,
+    'ham köprü hatası kullanıcıya gösterilmemeli');
 });
 
-test('liveMatchEmbed: aktif maç yokken sakin özet', () => {
+test('liveMatchEmbed: aktif maç yokken boş durum kartı + sıradaki adım', () => {
   const e = liveMatchEmbed({ ok: true, count: 3, match: { active: false } });
-  assert.match(e.data.title, /Aktif maç yok/);
+  assert.match(e.data.title, /Aktif Maç Yok/);
   assert.match(e.data.description, /3/);
+  assert.match(e.data.description, /maç program/, 'kullanıcıya sıradaki adım gösterilmeli');
 });
 
 test('liveMatchEmbed: aktif maç alanları ve hayatta listesi', () => {
@@ -118,7 +122,8 @@ test('perfEmbed: TPS/MSPT/bellek alanları', () => {
 
 test('modHistoryEmbed: temiz sicil ve kayıt satırları', () => {
   const clean = modHistoryEmbed('Steve', { ok: true, player: 'Steve', entries: [] });
-  assert.match(clean.data.description, /temiz/);
+  assert.match(clean.data.title, /Sicil Temiz/);
+  assert.match(clean.data.description, /cezası bulunmuyor/);
 
   const e = modHistoryEmbed('Steve', {
     ok: true,
@@ -128,7 +133,7 @@ test('modHistoryEmbed: temiz sicil ve kayıt satırları', () => {
       { action: 'warn', staff: 'mod', reason: 'dil', durationMs: 0, createdAt: 1_784_224_803_000 },
     ],
   });
-  assert.match(e.data.title, /2 kayıt/);
+  assert.match(e.data.footer.text, /2 kayıt/);
   assert.match(e.data.description, /🔨 \*\*ban\*\*/);
   assert.match(e.data.description, /⚠️ \*\*warn\*\*/);
 });
@@ -148,7 +153,7 @@ test('modListEmbed: kalıcı/bitişli banlar', () => {
 
 test('statusBoardEmbed: ulaşılamıyor ve canlı pano halleri', () => {
   const down = statusBoardEmbed({ ok: false, error: 'x' }, null);
-  assert.match(down.data.title, /ulaşılamıyor/);
+  assert.match(down.data.title, /Ulaşılamıyor/);
 
   const up = statusBoardEmbed(ACTIVE_STATUS, {
     ok: true, tps: { m1: 20 }, mspt: 2.5, memory: { usedMb: 1024, maxMb: 4096 },

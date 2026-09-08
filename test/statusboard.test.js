@@ -43,7 +43,7 @@ test('shouldEdit: yalnız hash farklıyken true', () => {
 });
 
 test('presenceLine: maç, boş sunucu ve ulaşılamama halleri', () => {
-  assert.equal(presenceLine(STATUS), '⚔️ 4/8 — PvP');
-  assert.equal(presenceLine({ ok: true, count: 7, match: { active: false } }), '🎮 7 oyuncu | nautilusuhc.com');
+  assert.equal(presenceLine(STATUS), '⚔️ 4/8 hayatta — PvP');
+  assert.equal(presenceLine({ ok: true, count: 7, match: { active: false } }), '🎮 7 oyuncu • nautilusuhc.com');
   assert.equal(presenceLine({ ok: false }), 'nautilusuhc.com');
 });

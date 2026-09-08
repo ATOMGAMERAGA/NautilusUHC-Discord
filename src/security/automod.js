@@ -4,6 +4,7 @@ import { Tier, tierOf } from '../permissions.js';
 import { getSetting } from '../db.js';
 import { sendLog } from '../modlog.js';
 import { Colors } from '../embeds.js';
+import { clean } from '../util.js';
 
 /**
  * Lightweight chat automod: spam bursts, foreign invite links and mass mentions.
@@ -46,9 +47,13 @@ export function registerAutomod(client) {
         if (!isOwn) {
           await message.delete().catch(() => null);
           await sendLog(client, {
-            title: '🔗 Davet Linki Engellendi',
+            title: 'Davet Linki Silindi',
             color: Colors.warn,
-            description: `${message.author} — ${message.channel}\n\`${invite}\``,
+            fields: [
+              { name: 'Kullanıcı', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
+              { name: 'Kanal', value: `${message.channel}`, inline: true },
+              { name: 'Link', value: `\`${clean(invite, 100)}\``, inline: false },
+            ],
           });
           return;
         }
@@ -61,9 +66,14 @@ export function registerAutomod(client) {
         await message.delete().catch(() => null);
         await member?.timeout(SPAM_TIMEOUT_MS, 'Automod: toplu etiket').catch(() => null);
         await sendLog(client, {
-          title: '📢 Toplu Etiket Engellendi',
+          title: 'Toplu Etiket Engellendi',
           color: Colors.warn,
-          description: `${message.author} — ${message.channel} (${mentionCount} etiket, 5dk susturuldu)`,
+          fields: [
+            { name: 'Kullanıcı', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
+            { name: 'Kanal', value: `${message.channel}`, inline: true },
+            { name: 'Etiket sayısı', value: String(mentionCount), inline: true },
+            { name: 'Uygulanan', value: 'Mesaj silindi, 5 dk susturuldu', inline: false },
+          ],
         });
         return;
       }
@@ -78,9 +88,13 @@ export function registerAutomod(client) {
           await message.channel.bulkDelete(own, true).catch(() => null);
         }
         await sendLog(client, {
-          title: '🚫 Spam Engellendi',
+          title: 'Spam Engellendi',
           color: Colors.warn,
-          description: `${message.author} — ${message.channel} (5dk susturuldu, mesajları temizlendi)`,
+          fields: [
+            { name: 'Kullanıcı', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
+            { name: 'Kanal', value: `${message.channel}`, inline: true },
+            { name: 'Uygulanan', value: 'Son mesajlar silindi, 5 dk susturuldu', inline: false },
+          ],
         });
       }
     } catch (err) {

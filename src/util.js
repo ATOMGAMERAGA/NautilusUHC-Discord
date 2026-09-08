@@ -69,3 +69,30 @@ export function clean(text, max = 900) {
   const s = String(text ?? '').replace(/[`*_~|]/g, '\\$&');
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
+
+/**
+ * Kod aralığı (`` `...` ``) içinde gösterilecek metin. clean() markdown kaçışı
+ * yaptığından kod aralığının içinde ters bölü işaretleri harfiyen görünür; bu
+ * yüzden oyuncu adı gibi değerler kod aralığında bu yardımcıyla verilir.
+ * Yalnız aralığı kırabilecek karakterler temizlenir, ad okunur kalır.
+ */
+export function codeText(text, max = 40) {
+  const s = String(text ?? '').replace(/[`\\\r\n]/g, '').trim();
+  const cut = s.length > max ? `${s.slice(0, max)}…` : s;
+  return cut || '—';
+}
+
+/**
+ * Yalnız adı geçen kullanıcıların etiketlenmesine izin veren allowedMentions.
+ * Kullanıcı/yetkili kaynaklı bir metin mesajın `content` alanına giriyorsa
+ * (çekiliş ödülü, hatırlatma metni, talep konusu) kazara @everyone/@here veya
+ * rol pingi oluşmasını engeller.
+ */
+export function mentionUsers(...ids) {
+  return { parse: [], users: [...new Set(ids.flat().filter(Boolean))] };
+}
+
+/** Hiçbir etiketin ping atmadığı allowedMentions. */
+export function noMentions() {
+  return { parse: [] };
+}
