@@ -91,7 +91,8 @@ test('normal match_start yalnız abonelere birer DM gönderir', async () => {
   // Kullanıcı kontrollü etiketlenir; mention allowlist yalnız o kullanıcı.
   for (const d of dms) {
     assert.ok(d.payload.content.includes(`<@${d.id}>`));
-    assert.deepEqual(d.payload.allowedMentions, { users: [d.id] });
+    assert.deepEqual(d.payload.allowedMentions, { parse: [], users: [d.id] },
+      'DM yalnız alıcıyı etiketler; rol/everyone pingi mümkün değil');
   }
 });
 

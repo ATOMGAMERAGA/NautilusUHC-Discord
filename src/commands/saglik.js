@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { baseEmbed, Colors } from '../embeds.js';
+import { baseEmbed, brandFooter, Colors } from '../embeds.js';
 import { db, pendingTaskCount, ticketsV2, getSetting } from '../db.js';
 import { mcapi } from '../mcapi.js';
 import { bridgeQueue } from '../bridgequeue.js';
@@ -18,7 +18,7 @@ import { formatDuration } from '../util.js';
 const BRIDGE_TIMEOUT_MS = 3000;
 
 function moduleLine(name, on) {
-  return `${on ? '🟢' : '🔴'} ${name}: **${on ? 'açık' : 'kapalı'}**`;
+  return `${on ? '🟢' : '⚫'} ${name} — ${on ? 'açık' : 'kapalı'}`;
 }
 
 export default [
@@ -26,7 +26,7 @@ export default [
     tier: Tier.REHBER,
     data: new SlashCommandBuilder()
       .setName('sağlık')
-      .setDescription('Bot sağlık durumu: uptime, veritabanı, köprü, zamanlayıcı (Rehber+)'),
+      .setDescription('Botun sağlık durumunu gösterir: uptime, veritabanı, köprü, görev kuyruğu'),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true });
 
@@ -47,39 +47,56 @@ export default [
       const pending = pendingTaskCount();
       const openTickets = ticketsV2.openCount();
 
-      const allOk = dbOk; // köprü degraded sayılır, genel durumu düşürmez
-      const embed = baseEmbed(allOk ? Colors.success : Colors.danger)
-        .setTitle(`${allOk ? '💚' : '❤️‍🩹'} Bot Sağlık Durumu`)
+      // Köprü erişilemez olması botu "bozuk" yapmaz: bu bir kısıt (degraded),
+      // genel sağlık kararını yalnız veritabanı belirler.
+      const healthy = dbOk;
+      const degraded = !bridge.ok || !queue.connected;
+      const embed = baseEmbed(healthy ? (degraded ? Colors.warn : Colors.success) : Colors.danger)
+        .setTitle('🩺 Bot Sağlık Durumu')
+        .setDescription(healthy
+          ? (degraded
+            ? 'Bot çalışıyor, Minecraft köprüsü şu anda kısıtlı.'
+            : 'Tüm sistemler normal çalışıyor.')
+          : 'Veritabanına erişilemiyor — bot işlevlerinin çoğu çalışmayacak.')
         .addFields(
-          { name: '⏱️ Çalışma süresi', value: formatDuration(uptimeMs), inline: true },
-          { name: '🗄️ Veritabanı', value: dbOk ? '🟢 Sağlıklı' : '🔴 HATA', inline: true },
+          { name: 'Çalışma süresi', value: formatDuration(uptimeMs), inline: true },
+          { name: 'Veritabanı', value: dbOk ? '🟢 Sağlıklı' : '🔴 Erişilemiyor', inline: true },
+          { name: 'API gecikmesi', value: `${Math.round(interaction.client.ws.ping)} ms`, inline: true },
           {
-            name: '🌉 Köprü (plugin)',
-            value: bridge.ok ? '🟢 Erişilebilir' : `🟡 Erişilemiyor — ${bridge.error ?? 'bilinmiyor'}`,
+            name: 'Köprü erişimi',
+            value: bridge.ok ? '🟢 Yanıt veriyor' : '🟡 Yanıt vermiyor',
             inline: true,
           },
           {
-            name: '🔌 Ters köprü',
+            name: 'Plugin bağlantısı',
             value: queue.connected
-              ? `🟢 Plugin bağlı${queue.pending ? ` — ${queue.pending} iş kuyrukta` : ''}`
-              : '🟡 Plugin bağlı değil — sunucu kapalı olabilir ya da '
-                + 'plugin config.yml → `bridge.bot-url` / `bridge.token` eksik',
+              ? `🟢 Bağlı${queue.pending ? ` • ${queue.pending} iş kuyrukta` : ''}`
+              : '🟡 Bağlı değil',
             inline: true,
           },
-          { name: '📆 Bekleyen görev', value: String(pending), inline: true },
-          { name: '🎫 Açık talep', value: String(openTickets), inline: true },
-          { name: '📡 API gecikmesi', value: `${Math.round(interaction.client.ws.ping)}ms`, inline: true },
+          { name: 'Bekleyen görev', value: String(pending), inline: true },
+          { name: 'Açık destek talebi', value: String(openTickets), inline: true },
           {
-            name: '🧩 Modüller',
+            name: 'Modüller',
             value: [
-              moduleLine('Guard (anti-nuke)', getSetting('guard_enabled', '1') === '1'),
+              moduleLine('Patlama koruması', getSetting('guard_enabled', '1') === '1'),
               moduleLine('Automod', getSetting('automod_enabled', '1') === '1'),
-              moduleLine('Hoş geldin', Boolean(getSetting('welcome_channel', ''))),
+              moduleLine('Hoş geldin mesajı', Boolean(getSetting('welcome_channel', ''))),
               moduleLine('Destek sistemi', getSetting('tickets_enabled', '1') === '1'),
             ].join('\n'),
+            inline: false,
           },
-        );
-      return interaction.editReply({ embeds: [embed] });
+        )
+        .setTimestamp();
+      if (!queue.connected) {
+        embed.addFields({
+          name: 'Öneri',
+          value: 'Plugin bota bağlanmıyor. Minecraft sunucusu kapalı olabilir ya da '
+            + 'plugin `config.yml` içindeki `bridge.bot-url` / `bridge.token` değerleri eksik olabilir.',
+          inline: false,
+        });
+      }
+      return interaction.editReply({ embeds: [embed.setFooter(brandFooter('Yalnız yetkililer görür'))] });
     },
   },
 ];

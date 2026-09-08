@@ -1,13 +1,19 @@
 import { Events } from 'discord.js';
 import { config } from './config.js';
 import { getSetting } from './db.js';
-import { baseEmbed, Colors, Assets } from './embeds.js';
-import { discordTime } from './util.js';
+import { baseEmbed, Colors, Assets, Brand } from './embeds.js';
+import { mentionUsers } from './util.js';
 
 /** Varsayılan otorol — /admin otorol ile değiştirilebilir/kapatılabilir. */
 const DEFAULT_AUTOROLE_ID = '1522154206285271102';
 
-/** Sends a welcome embed when a member joins (channel set via /admin hoşgeldin). */
+/**
+ * Yeni üye karşılaması — botun ilk izlenimi.
+ *
+ * Tek ekranda üç şey verir: hoş geldin, kim olduğun (kaçıncı üye) ve ilk üç
+ * adım. Uzun paragraf, kural duvarı veya banner yığını yok; marka görseli tek
+ * ve büyük görsel olarak kullanılır. Kanal /admin hoşgeldin ile ayarlanır.
+ */
 export function registerWelcome(client) {
   client.on(Events.GuildMemberAdd, async (member) => {
     try {
@@ -29,17 +35,31 @@ export function registerWelcome(client) {
       const channel = await client.channels.fetch(channelId).catch(() => null);
       if (!channel?.isTextBased()) return;
 
-      const embed = baseEmbed(Colors.main)
-        .setTitle('🌊 Nautilus PvP\'ye Hoş Geldin!')
-        .setDescription(`${member.user}, aramıza katıldın — sen **${member.guild.memberCount}.** üyemizsin!\n\n`
-          + '➤ Maçlara katılmak için önce Minecraft hesabını bağla: sunucuda `/link` yaz, '
-          + 'kodu hesap bağlama kanalındaki butona gir.\n'
-          + '➤ Maç saatleri ve detaylar için `/maç program` komutunu kullanabilirsin.\n'
-          + '➤ Sunucu: `nautilusuhc.com`')
+      const linkChannel = config.linkChannelId ? `<#${config.linkChannelId}>` : 'hesap bağlama kanalı';
+      const embed = baseEmbed(Colors.brand)
+        .setTitle(`🌊 ${Brand.community}'ye Hoş Geldin`)
+        .setDescription(`${member.user}, aramıza katıldın — sunucunun **${member.guild.memberCount}.** üyesisin.`)
         .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
         .setImage(Assets.wordmarkScene)
-        .addFields({ name: 'Hesap açılışı', value: discordTime(member.user.createdTimestamp, 'R'), inline: true });
-      await channel.send({ content: `${member.user}`, embeds: [embed] });
+        .addFields(
+          {
+            name: 'Başlarken',
+            value: `**1.** \`${Brand.domain}\` sunucusuna gir ve sohbete \`/link\` yaz.\n`
+              + `**2.** Aldığın kodu ${linkChannel} kanalındaki **Hesap Bağla** butonuna gir.\n`
+              + '**3.** `/maç program` ile sıradaki UHC maçının saatini gör.',
+          },
+          {
+            name: 'İşine yarayacak komutlar',
+            value: '`/profil` — ELO ve maç istatistiklerin\n'
+              + '`/maç-bildirim` — maç başlarken DM al\n'
+              + '`/destek aç` — bir sorunda yetkililere ulaş',
+          },
+        );
+      await channel.send({
+        content: `${member.user}`,
+        embeds: [embed],
+        allowedMentions: mentionUsers(member.id),
+      });
     } catch (err) {
       console.error('[welcome]', err.message);
     }

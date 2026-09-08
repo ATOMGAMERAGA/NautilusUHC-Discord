@@ -1,8 +1,8 @@
 import { config } from './config.js';
 import { dueTasks, finishTask, giveaways, polls, addCase } from './db.js';
-import { baseEmbed, Colors } from './embeds.js';
+import { baseEmbed, brandFooter, Colors } from './embeds.js';
 import { sendLog } from './modlog.js';
-import { clean } from './util.js';
+import { clean, mentionUsers } from './util.js';
 
 /**
  * Persistent scheduler: tasks live in SQLite, so timed actions (tempban unbans,
@@ -36,19 +36,30 @@ export async function endGiveaway(client, id, { reroll = false } = {}) {
   if (!channel?.isTextBased()) return winners;
 
   const mention = winners.length ? winners.map((w) => `<@${w}>`).join(', ') : null;
-  const resultEmbed = baseEmbed(winners.length ? Colors.success : Colors.dark)
-    .setTitle(`🎉 Çekiliş Bitti — ${clean(gw.prize, 100)}`)
-    .setDescription(winners.length
-      ? `Kazanan${winners.length > 1 ? 'lar' : ''}: ${mention}\nKatılım: **${entries.length}** kişi`
-      : `Kimse katılmadı, kazanan yok. (Katılım: ${entries.length})`);
+  const resultEmbed = baseEmbed(winners.length ? Colors.success : Colors.neutral)
+    .setTitle('🎉 Çekiliş Sonuçlandı')
+    .setDescription(`Ödül: **${clean(gw.prize, 100)}**`)
+    .addFields(
+      {
+        name: winners.length > 1 ? 'Kazananlar' : 'Kazanan',
+        value: mention ?? 'Katılım olmadığı için kazanan çıkmadı.',
+        inline: false,
+      },
+      { name: 'Katılımcı', value: String(entries.length), inline: true },
+    )
+    .setFooter(brandFooter(`Çekiliş #${gw.id}`))
+    .setTimestamp();
 
   if (gw.message_id) {
     const msg = await channel.messages.fetch(gw.message_id).catch(() => null);
     if (msg) await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => null);
   }
+  // Kazananlar duyuruda etiketlenir; ödül metni yetkili girdisi olduğu için
+  // yalnız bu kullanıcıların etiketlenmesine izin verilir.
   await channel.send({
-    content: mention ? `🎉 Tebrikler ${mention}! **${clean(gw.prize, 100)}** kazandınız!` : undefined,
-    embeds: mention ? [] : [resultEmbed],
+    content: mention ? `Tebrikler ${mention}!` : undefined,
+    embeds: [resultEmbed],
+    allowedMentions: mentionUsers(winners),
   }).catch(() => null);
   return winners;
 }
@@ -69,7 +80,7 @@ export function pollResultEmbed(poll) {
   return baseEmbed(Colors.info)
     .setTitle(`📊 ${clean(poll.question, 200)}`)
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `Toplam ${total} oy • Nautilus PvP` });
+    .setFooter(brandFooter(`Anket #${poll.id}`, `${total} oy`));
 }
 
 /** Ends a poll and replaces its message with final results. */
@@ -80,7 +91,7 @@ export async function endPoll(client, id) {
   const channel = await client.channels.fetch(poll.channel_id).catch(() => null);
   if (!channel?.isTextBased() || !poll.message_id) return;
   const msg = await channel.messages.fetch(poll.message_id).catch(() => null);
-  const embed = pollResultEmbed(poll).setTitle(`📊 [BİTTİ] ${clean(poll.question, 190)}`);
+  const embed = pollResultEmbed(poll).setTitle(`📊 Anket Bitti — ${clean(poll.question, 180)}`);
   if (msg) await msg.edit({ embeds: [embed], components: [] }).catch(() => null);
   else await channel.send({ embeds: [embed] }).catch(() => null);
 }
@@ -98,9 +109,12 @@ async function runTask(client, task) {
     await guild.members.unban(data.userId, 'Süreli ban doldu (otomatik)').catch(() => null);
     addCase('unban', data.userId, client.user.id, 'Süreli ban otomatik doldu');
     await sendLog(client, {
-      title: '🔓 Otomatik Unban',
+      title: 'Süreli Ban Sona Erdi',
       color: Colors.success,
-      description: `<@${data.userId}> (\`${data.userId}\`) — süreli ban süresi doldu.`,
+      fields: [
+        { name: 'Kullanıcı', value: `<@${data.userId}> (\`${data.userId}\`)`, inline: true },
+        { name: 'Yetkili', value: 'Otomatik (zamanlayıcı)', inline: true },
+      ],
     });
     return;
   }
@@ -109,8 +123,11 @@ async function runTask(client, task) {
     const channel = await client.channels.fetch(data.channelId).catch(() => null);
     if (channel?.isTextBased()) {
       await channel.send({
-        content: `⏰ <@${data.userId}>`,
-        embeds: [baseEmbed(Colors.info).setTitle('⏰ Hatırlatıcı').setDescription(clean(data.message, 1000))],
+        content: `<@${data.userId}>`,
+        embeds: [baseEmbed(Colors.info)
+          .setTitle('⏰ Hatırlatma')
+          .setDescription(clean(data.message, 1000))],
+        allowedMentions: mentionUsers(data.userId),
       }).catch(() => null);
     }
     return;

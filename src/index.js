@@ -3,7 +3,7 @@ import {
 } from 'discord.js';
 import { config } from './config.js';
 import { hasTier, tierName } from './permissions.js';
-import { errEmbed } from './embeds.js';
+import { errEmbed, failureEmbed } from './embeds.js';
 import { resolveComponent } from './components.js';
 import { registerGuard } from './security/guard.js';
 import { registerAutomod } from './security/automod.js';
@@ -139,11 +139,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const command = commandMap.get(interaction.commandName);
       if (!command) return;
       if (!interaction.inGuild()) {
-        return interaction.reply({ content: 'Komutlar yalnızca sunucu içinde kullanılabilir.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({
+          embeds: [errEmbed('Bot komutları yalnızca Nautilus PvP sunucusu içinde çalışır.', 'Sunucu Dışında Kullanılamaz')],
+          flags: MessageFlags.Ephemeral,
+        });
       }
       if (!hasTier(interaction.member, command.tier)) {
         return interaction.reply({
-          embeds: [errEmbed(`Bu komut için en az **${tierName(command.tier)}** yetkisi gerekir.`)],
+          embeds: [errEmbed(
+            `Bu komut **${tierName(command.tier)}** ve üzeri yetkililer içindir.\n`
+            + 'Kullanabileceğin komutları `/yardım` ile görebilirsin.',
+            'Yetki Gerekli',
+          )],
           flags: MessageFlags.Ephemeral,
         });
       }
@@ -156,8 +163,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (handler) await handler(interaction);
     }
   } catch (err) {
+    // Gerçek istisna yalnız sunucu logunda kalır; kullanıcı hiçbir zaman
+    // stack trace, endpoint veya kütüphane mesajı görmez.
     console.error(`[bot] Etkileşim hatası (${interaction.commandName ?? interaction.customId}):`, err);
-    const payload = { embeds: [errEmbed('Bir hata oluştu. Lütfen tekrar dene.')], flags: MessageFlags.Ephemeral };
+    const payload = {
+      embeds: [failureEmbed('Sorun sürerse `/destek aç` ile bir talep oluşturabilirsin.')],
+      flags: MessageFlags.Ephemeral,
+    };
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(payload).catch(() => null);
     } else if (interaction.isRepliable()) {

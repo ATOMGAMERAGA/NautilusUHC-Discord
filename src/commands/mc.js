@@ -1,17 +1,32 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { okEmbed, errEmbed, baseEmbed, Colors } from '../embeds.js';
+import {
+  okEmbed, errEmbed, baseEmbed, emptyEmbed, bridgeErrorEmbed, Colors, Brand,
+} from '../embeds.js';
 import { mcapi } from '../mcapi.js';
 import { addCase } from '../db.js';
-import { parseDuration, formatDuration, formatSeconds, clean } from '../util.js';
-import { perfEmbed, modHistoryEmbed, modListEmbed } from '../liveembeds.js';
+import { parseDuration, formatDuration, formatSeconds, clean, codeText } from '../util.js';
+import { perfEmbed, modHistoryEmbed, modListEmbed, nameList } from '../liveembeds.js';
 import { sendLog } from '../modlog.js';
 
 /**
  * Minecraft-side moderation & status. Every command talks to the NautilusUHC
- * plugin bridge over HTTP, so Discord staff can moderate the game server
- * without touching the console.
+ * plugin bridge, so Discord staff can moderate the game server without touching
+ * the console.
+ *
+ * Yaptırım sonucu iki yüzeyde farklı görünür: yetkiliye kısa bir onay kartı,
+ * log kanalına sabit alan düzeninde ayrıntılı kayıt.
  */
+
+/** Yaptırımın kullanıcıya görünen adı — "mute" gibi teknik anahtar gösterilmez. */
+const ACTION_LABELS = {
+  ban: { done: 'Sunucudan Yasaklandı', log: 'MC Ban' },
+  unban: { done: 'Yasak Kaldırıldı', log: 'MC Ban Kaldırma' },
+  mute: { done: 'Sohbette Susturuldu', log: 'MC Susturma' },
+  unmute: { done: 'Susturma Kaldırıldı', log: 'MC Susturma Kaldırma' },
+  kick: { done: 'Sunucudan Atıldı', log: 'MC Kick' },
+  warn: { done: 'Uyarı Verildi', log: 'MC Uyarı' },
+};
 
 async function runModAction(interaction, action, { needDuration = false, allowDuration = false, needReason = false } = {}) {
   const player = interaction.options.getString('oyuncu', true).trim();
@@ -22,32 +37,38 @@ async function runModAction(interaction, action, { needDuration = false, allowDu
   if (rawDuration) {
     durationMs = parseDuration(rawDuration);
     if (!durationMs) {
-      return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `10dk`, `2sa`, `7g`.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Süreyi anlayamadım. Örnek: `10dk`, `2sa`, `7g`.', 'Geçersiz Süre')],
+        ephemeral: true,
+      });
     }
   }
 
   await interaction.deferReply();
   const res = await mcapi.mod(action, player, { reason, durationMs });
   if (!res.ok) {
-    return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+    return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: `MC ${action}` })] });
   }
 
+  const labels = ACTION_LABELS[action] ?? { done: 'İşlem Uygulandı', log: `MC ${action}` };
   addCase(`mc_${action}`, null, interaction.user.id, reason, `${player}${durationMs ? ` / ${formatDuration(durationMs)}` : ''}`);
   await sendLog(interaction.client, {
-    title: `⛏️ MC ${action.toUpperCase()}`,
-    color: Colors.warn,
+    title: labels.log,
+    color: action === 'ban' ? Colors.danger : Colors.warn,
     fields: [
-      { name: 'Oyuncu', value: `\`${clean(player, 40)}\``, inline: true },
+      { name: 'Oyuncu', value: `\`${codeText(player, 40)}\``, inline: true },
       { name: 'Yetkili', value: `${interaction.user}`, inline: true },
-      { name: 'Süre', value: durationMs ? formatDuration(durationMs) : 'kalıcı/—', inline: true },
-      { name: 'Sebep', value: clean(reason || '—'), inline: false },
+      { name: 'Süre', value: durationMs ? formatDuration(durationMs) : 'Kalıcı / —', inline: true },
+      { name: 'Sebep', value: clean(reason || 'Belirtilmedi'), inline: false },
     ],
   });
 
-  const durText = durationMs ? ` (**${formatDuration(durationMs)}**)` : '';
   return interaction.editReply({
-    embeds: [okEmbed(`✅ **${clean(player, 40)}** için Minecraft'ta **${action}** uygulandı${durText}.`
-      + (reason ? `\n**Sebep:** ${clean(reason)}` : ''))],
+    embeds: [okEmbed(
+      `**${clean(player, 40)}** için işlem uygulandı${durationMs ? ` — süre **${formatDuration(durationMs)}**` : ''}.`
+      + (reason ? `\nSebep: ${clean(reason, 300)}` : ''),
+      labels.done,
+    )],
   });
 }
 
@@ -58,7 +79,7 @@ function playerCmd(name, description, { duration = false, reason = true } = {}) 
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
     .addStringOption((o) => o.setName('oyuncu').setDescription('Minecraft oyuncu adı').setRequired(true));
   if (duration) b.addStringOption((o) => o.setName('süre').setDescription('Örn: 10dk, 2sa, 7g (boş = kalıcı)'));
-  if (reason) b.addStringOption((o) => o.setName('sebep').setDescription('Sebep'));
+  if (reason) b.addStringOption((o) => o.setName('sebep').setDescription('İşlem sebebi'));
   return b;
 }
 
@@ -102,14 +123,19 @@ export default [
     async execute(interaction) {
       await interaction.deferReply();
       const res = await mcapi.status();
-      if (!res.ok) return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+      if (!res.ok) return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'çevrimiçi listesi' })] });
+
       const online = res.online ?? [];
-      const embed = baseEmbed(Colors.main)
-        .setTitle(`🟢 Çevrimiçi Oyuncular — ${online.length}`)
-        .setDescription(online.length
-          ? online.map((n) => `\`${n}\``).join(', ').slice(0, 3900)
-          : 'Şu anda çevrimiçi oyuncu yok.');
-      return interaction.editReply({ embeds: [embed] });
+      if (!online.length) {
+        return interaction.editReply({
+          embeds: [emptyEmbed('Sunucu Sessiz', 'Şu anda çevrimiçi oyuncu yok.')],
+        });
+      }
+      return interaction.editReply({
+        embeds: [baseEmbed(Colors.brand)
+          .setTitle(`🟢 Çevrimiçi Oyuncular — ${online.length}`)
+          .setDescription(nameList(online, { limit: 120, max: 3800 }))],
+      });
     },
   },
 
@@ -121,25 +147,21 @@ export default [
     async execute(interaction) {
       await interaction.deferReply();
       const res = await mcapi.status();
-      if (!res.ok) {
-        return interaction.editReply({
-          embeds: [baseEmbed(Colors.danger).setTitle('🔴 Sunucu Durumu')
-            .setDescription(`Sunucuya ulaşılamadı: ${res.error}`)],
-        });
-      }
+      if (!res.ok) return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'sunucu durumu' })] });
+
       const match = res.match ?? {};
-      const embed = baseEmbed(Colors.main)
-        .setTitle('🌊 Nautilus PvP — Sunucu Durumu')
+      const embed = baseEmbed(Colors.brand)
+        .setTitle(`🌊 ${Brand.community} — Sunucu Durumu`)
         .addFields(
-          { name: 'Durum', value: '🟢 Çevrimiçi', inline: true },
+          { name: 'Sunucu', value: '🟢 Çevrimiçi', inline: true },
           { name: 'Oyuncular', value: String(res.count ?? (res.online?.length ?? 0)), inline: true },
-          { name: 'Maç', value: match.active ? `⚔️ ${match.state}` : '💤 Aktif maç yok', inline: true },
+          { name: 'Maç', value: match.active ? `⚔️ ${clean(match.state ?? 'devam ediyor', 30)}` : '💤 Aktif maç yok', inline: true },
         );
       if (match.active) {
         embed.addFields(
-          { name: 'Hayatta', value: `${match.aliveCount ?? '?'} / ${match.participantCount ?? '?'}`, inline: true },
+          { name: 'Hayatta', value: `**${match.aliveCount ?? '?'}** / ${match.participantCount ?? '?'}`, inline: true },
           { name: 'Geçen Süre', value: formatSeconds(match.elapsedSecs ?? 0), inline: true },
-          { name: 'Senaryolar', value: match.scenarios?.length ? match.scenarios.join(', ') : 'yok', inline: true },
+          { name: 'Senaryolar', value: match.scenarios?.length ? clean(match.scenarios.join(', '), 300) : '—', inline: true },
         );
       }
       // Performans satırı — eski plugin sürümünde endpoint yoksa sessiz atlanır.
@@ -147,10 +169,12 @@ export default [
       if (perf.ok) {
         embed.addFields({
           name: 'Performans',
-          value: `TPS ${perf.tps?.m1 ?? '?'} • ${perf.mspt ?? '?'} ms • ${perf.memory?.usedMb ?? '?'}/${perf.memory?.maxMb ?? '?'} MB`,
+          value: `TPS ${perf.tps?.m1 ?? '?'} • ${perf.mspt ?? '?'} ms • `
+            + `${perf.memory?.usedMb ?? '?'}/${perf.memory?.maxMb ?? '?'} MB`,
           inline: false,
         });
       }
+      embed.addFields({ name: 'Sunucu adresi', value: `\`${Brand.domain}\``, inline: false });
       return interaction.editReply({ embeds: [embed] });
     },
   },
@@ -159,7 +183,7 @@ export default [
     tier: Tier.REHBER,
     data: new SlashCommandBuilder()
       .setName('sunucuperf')
-      .setDescription('Minecraft sunucusunun performansını gösterir (TPS/MSPT/bellek)'),
+      .setDescription('Minecraft sunucusunun TPS, MSPT ve bellek durumunu gösterir'),
     async execute(interaction) {
       await interaction.deferReply();
       return interaction.editReply({ embeds: [perfEmbed(await mcapi.perf())] });
@@ -184,7 +208,7 @@ export default [
     tier: Tier.MOD,
     data: new SlashCommandBuilder()
       .setName('mcbanlist')
-      .setDescription('Minecraft sunucusundaki aktif banları listeler')
+      .setDescription('Minecraft sunucusundaki aktif yasakları listeler')
       .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
     async execute(interaction) {
       await interaction.deferReply();

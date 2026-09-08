@@ -2,8 +2,8 @@ import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { getSetting, processedEvents } from './db.js';
-import { baseEmbed, Colors, Assets } from './embeds.js';
-import { trDateTime, discordTime, formatSeconds, clean } from './util.js';
+import { baseEmbed, brandFooter, Colors, Assets, Brand } from './embeds.js';
+import { trDateTime, discordTime, formatSeconds, clean, codeText } from './util.js';
 import { bridgeQueue, MAX_POLL_WAIT_MS } from './bridgequeue.js';
 import { publicStats } from './statsproxy.js';
 
@@ -176,152 +176,182 @@ function authenticate(req, raw) {
   return 'unauthorized:signature_required';
 }
 
+/**
+ * Köprü eventlerinin duyuru kartları — botun en görünür yüzeyi.
+ *
+ * Ortak kurallar:
+ *  - Başlık olayı tek bakışta anlatır; test eventleri "🧪 TEST —" ile ayrışır.
+ *  - En önemli bilgi (kazanan, başlangıç saati, faz) en üstte durur.
+ *  - Alan adları süssüzdür; emoji yalnız başlıkta ve durum işaretlerinde.
+ *  - Duyurular zaman damgalıdır: geçmişe bakıldığında ne zaman olduğu okunur.
+ */
+const testTitle = (test, title) => `${test ? '🧪 TEST — ' : ''}${title}`;
+
+/** Takım boyutu → okunur mod adı. */
+const modeLabel = (teamSize) => (teamSize > 1 ? `To${teamSize}` : 'FFA (Solo)');
+
+const scenarioList = (scenarios) => (scenarios?.length ? clean(scenarios.join(', '), 300) : '—');
+
 function eventEmbed(type, data, test) {
   switch (type) {
     case 'match_scheduled': {
       const e = baseEmbed(test ? Colors.warn : Colors.info)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}📅 Maç Planlandı`)
+        .setTitle(testTitle(test, '📅 Maç Planlandı'))
+        .setDescription(`Sıradaki UHC maçı ${discordTime(data.startsAt, 'R')} başlıyor — `
+          + `**${data.slot ?? trDateTime(data.startsAt)}** (TR).`)
         .setThumbnail(Assets.item.diamondSword)
         .setImage(Assets.wordmarkScene)
-        .setDescription(`Yeni bir UHC maçı planlandı! Katılmak için sunucuya gir: \`nautilusuhc.com\``)
         .addFields(
-          { name: '🕐 Başlangıç', value: `${discordTime(data.startsAt)} — **${data.slot ?? trDateTime(data.startsAt)}** (TR)`, inline: false },
-          { name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true },
-          { name: '👥 Takım', value: data.teamSize > 1 ? `To${data.teamSize}` : 'FFA (Solo)', inline: true },
-          { name: '🎲 Senaryolar', value: data.scenarios?.length ? data.scenarios.join(', ') : 'yok', inline: true },
+          { name: 'Başlangıç', value: discordTime(data.startsAt, 'f'), inline: true },
+          { name: 'Mod', value: modeLabel(data.teamSize), inline: true },
+          { name: 'Host', value: clean(data.host ?? '—', 30), inline: true },
         );
+      if (data.scenarios?.length) {
+        e.addFields({ name: 'Senaryolar', value: scenarioList(data.scenarios), inline: false });
+      }
       if (data.settings) {
         const s = data.settings;
-        e.addFields({
-          name: '⚙️ Ayarlar',
-          value: [
-            s.pvpAt != null ? `PvP: ${s.pvpAt}. dk` : null,
-            s.healAt != null ? `Heal: ${s.healAt}. dk` : null,
-            s.borderSize != null ? `Border: ±${s.borderSize}` : null,
-            s.latecomerWindow != null ? `Geç katılım: ${s.latecomerWindow} dk` : null,
-          ].filter(Boolean).join(' • ') || '—',
-        });
+        const line = [
+          s.pvpAt != null ? `PvP ${s.pvpAt}. dk` : null,
+          s.healAt != null ? `Heal ${s.healAt}. dk` : null,
+          s.borderSize != null ? `Border ±${s.borderSize}` : null,
+          s.latecomerWindow != null ? `Geç katılım ${s.latecomerWindow} dk` : null,
+        ].filter(Boolean).join(' • ');
+        if (line) e.addFields({ name: 'Ayarlar', value: line, inline: false });
       }
-      e.addFields({ name: '🔗 Katılım', value: 'Maça katılmak için Discord hesabını bağlamış olman gerekir (`/link`). Oyun içinde `/maç katıl` yaz.' });
-      return e;
+      return e.addFields({
+        name: 'Katılım',
+        value: `\`${Brand.domain}\` sunucusuna gir ve \`/maç katıl\` yaz.\n`
+          + 'Katılmak için Discord hesabının bağlı olması gerekir (`/link`).',
+      }).setTimestamp();
     }
 
     case 'match_start':
       return baseEmbed(test ? Colors.warn : Colors.success)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}⚔️ Maç Başladı!`)
+        .setTitle(testTitle(test, '⚔️ Maç Başladı'))
+        .setDescription(`Maç \`${Brand.domain}\` sunucusunda başladı. Canlı durum için \`/maç canlı\`.`)
         .setThumbnail(Assets.item.diamondSword)
         .addFields(
-          { name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true },
-          { name: '👥 Oyuncu', value: String(data.players ?? '?'), inline: true },
-          { name: '🎲 Senaryolar', value: data.scenarios?.length ? data.scenarios.join(', ') : 'yok', inline: true },
-          { name: '🕐 Başlangıç', value: `${trDateTime(data.startedAt ?? Date.now())} (TR)`, inline: false },
-        );
+          { name: 'Oyuncu', value: String(data.players ?? '—'), inline: true },
+          { name: 'Host', value: clean(data.host ?? '—', 30), inline: true },
+          { name: 'Senaryolar', value: scenarioList(data.scenarios), inline: true },
+        )
+        .setTimestamp(new Date(data.startedAt ?? Date.now()));
 
     case 'match_end': {
-      const e = baseEmbed(test ? Colors.warn : Colors.main)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}🏆 Maç Bitti!`)
+      const winner = clean(data.winner ?? '', 40);
+      const e = baseEmbed(test ? Colors.warn : Colors.brand)
+        .setTitle(testTitle(test, winner ? `🏆 ${winner} Kazandı` : '🏆 Maç Bitti'))
         .setThumbnail(Assets.item.goldenApple)
+        .setDescription(winner
+          ? `Maç sona erdi. Kazanan: **${winner}**.`
+          : 'Maç sona erdi.')
         .addFields(
-          { name: '🥇 Kazanan', value: `**${clean(data.winner ?? '—', 40)}**`, inline: true },
+          { name: 'Süre', value: formatSeconds(data.durationSecs ?? 0), inline: true },
+          { name: 'Katılımcı', value: String(data.participantCount ?? '—'), inline: true },
         );
-      // MVP oylaması sonucu — kazananın hemen altında. Veri yoksa (test maçı,
-      // solo, oylama kapalı) alan sessizce atlanır.
-      if (data.mvpName && !data.mvpVotes) {
-        // Oylamasız MVP (en çok öldüren) — oy sayısı gösterilmez.
+      // MVP oylaması sonucu. Veri yoksa (test maçı, solo, oylama kapalı) alan
+      // sessizce atlanır.
+      if (data.mvpName) {
         e.addFields({
-          name: "🏆 Maçın MVP'si",
-          value: `${clean(data.mvpName, 30)} — ${data.mvpKills ?? 0} kill`,
-          inline: true,
-        });
-      } else if (data.mvpName) {
-        e.addFields({
-          name: "🏆 Maçın MVP'si",
-          value: `${clean(data.mvpName, 30)} — ${data.mvpVotes ?? 0} oy, ${data.mvpKills ?? 0} kill`,
+          name: 'MVP',
+          value: data.mvpVotes
+            ? `${clean(data.mvpName, 30)} — ${data.mvpVotes} oy, ${data.mvpKills ?? 0} kill`
+            : `${clean(data.mvpName, 30)} — ${data.mvpKills ?? 0} kill`,
           inline: true,
         });
       }
-      e.addFields(
-          { name: '⏱️ Süre', value: formatSeconds(data.durationSecs ?? 0), inline: true },
-          { name: '👥 Katılımcı', value: String(data.participantCount ?? '?'), inline: true },
-          { name: '📅 Bitiş', value: `${discordTime(data.endedAt ?? Date.now())} — ${trDateTime(data.endedAt ?? Date.now())} (TR)`, inline: false },
-        );
       if (data.top?.length) {
         e.addFields({
-          name: '🗡️ En Çok Kill',
-          value: data.top.slice(0, 5).map((p, i) => `**${i + 1}.** ${clean(p.name, 20)} — ${p.kills} kill`).join('\n'),
+          name: 'En çok kill',
+          value: data.top.slice(0, 5).map((p, i) => {
+            const medal = ['🥇', '🥈', '🥉'][i] ?? `**${i + 1}.**`;
+            return `${medal} ${clean(p.name, 20)} — ${p.kills} kill`;
+          }).join('\n'),
         });
       }
       if (data.matchId != null) {
-        e.addFields({ name: '📊 Detay', value: `\`/maç detay ${data.matchId}\` • Envanter snapshot: \`/maç envanter ${data.matchId} <oyuncu>\`` });
+        e.addFields({ name: 'Ayrıntı', value: `\`/maç detay ${data.matchId}\`` });
       }
-      return e;
+      return e.setTimestamp(new Date(data.endedAt ?? Date.now()));
     }
 
     case 'match_cancelled':
       return baseEmbed(Colors.danger)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}❌ Maç İptal Edildi`)
+        .setTitle(testTitle(test, '❌ Maç İptal Edildi'))
         .setThumbnail(Assets.block.cobweb)
-        .setDescription(`**Saat:** ${data.slot ?? '?'} (TR)\n**Host:** ${clean(data.host ?? '?', 30)}`
-          + (data.reason ? `\n**Sebep:** ${clean(data.reason)}` : ''));
+        .setDescription(`**${clean(data.slot ?? '?', 20)}** saatindeki maç oynanmayacak.`
+          + '\nSonraki saatler için `/maç program` kullanabilirsin.')
+        .addFields(
+          { name: 'Host', value: clean(data.host ?? '—', 30), inline: true },
+          ...(data.reason ? [{ name: 'Sebep', value: clean(data.reason, 500), inline: true }] : []),
+        )
+        .setTimestamp();
 
     case 'message':
-      return baseEmbed(test ? Colors.warn : Colors.main)
-        .setTitle(clean(data.title ?? 'Nautilus PvP', 200))
-        .setDescription(clean(data.message ?? '', 3900));
+      return baseEmbed(test ? Colors.warn : Colors.brand)
+        .setTitle(clean(data.title ?? Brand.community, 200))
+        .setDescription(clean(data.message ?? '', 3900))
+        .setTimestamp();
 
     // Host'un /host mesaj <metin> duyurusu — maç kanalına zengin embed.
     case 'host_message':
-      return baseEmbed(test ? Colors.warn : Colors.main)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}📣 Nautilus UHC — Host Duyuru`)
+      return baseEmbed(test ? Colors.warn : Colors.brand)
+        .setTitle(testTitle(test, '📣 Host Duyurusu'))
         .setThumbnail(Assets.mark)
         .setDescription(clean(data.message ?? '', 3900))
-        .addFields({ name: '🎙️ Host', value: clean(data.host ?? '?', 30), inline: true });
+        .setFooter(brandFooter(`Host: ${codeText(data.host ?? '—', 30)}`))
+        .setTimestamp();
 
     // Faz değişimi — plugin yalnız pvp/border_shrink/deathmatch geçişlerini yollar
     // (start/end zaten match_start/match_end tarafından duyurulur).
     case 'phase_change': {
       const PHASES = {
-        pvp: { title: '⚔️ PvP Açıldı!', color: Colors.danger },
-        border_shrink: { title: '🧱 Border Daralmaya Başladı', color: Colors.warn },
-        deathmatch: { title: '☠️ Deathmatch Zamanı!', color: Colors.danger },
+        pvp: { title: '⚔️ PvP Açıldı', color: Colors.danger, desc: 'Artık oyuncular birbirine vurabilir.' },
+        border_shrink: { title: '🧱 Border Daralıyor', color: Colors.warn, desc: 'Harita küçülmeye başladı.' },
+        deathmatch: { title: '☠️ Deathmatch', color: Colors.danger, desc: 'Son mücadele başladı.' },
       };
       const p = PHASES[data.phase]
-        ?? { title: `📢 Faz: ${clean(String(data.phase ?? '?'), 30)}`, color: Colors.info };
+        ?? { title: `📢 Yeni Faz: ${clean(String(data.phase ?? '?'), 30)}`, color: Colors.info, desc: null };
       const e = baseEmbed(test ? Colors.warn : p.color)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}${p.title}`)
+        .setTitle(testTitle(test, p.title))
         .setThumbnail(Assets.item.ironSword)
         .addFields(
-          { name: '⏱️ Geçen Süre', value: formatSeconds(data.elapsedSecs ?? 0), inline: true },
-          { name: '❤️ Hayatta', value: String(data.aliveCount ?? '?'), inline: true },
+          { name: 'Hayatta', value: String(data.aliveCount ?? '—'), inline: true },
+          { name: 'Geçen Süre', value: formatSeconds(data.elapsedSecs ?? 0), inline: true },
         );
+      if (p.desc) e.setDescription(p.desc);
       if (data.borderSize != null) {
-        e.addFields({ name: '🧱 Border', value: `±${data.borderSize}`, inline: true });
+        e.addFields({ name: 'Border', value: `±${data.borderSize}`, inline: true });
       }
-      return e;
+      return e.setTimestamp();
     }
 
     // ELO küme (tier) değişimi — kutlama/uyarı duyurusu.
     case 'tier_change': {
       const up = data.direction !== 'demote';
       return baseEmbed(test ? Colors.warn : (up ? Colors.success : Colors.warn))
-        .setTitle(`${test ? '🧪 TEST — ' : ''}${up ? '📈 Küme Atladı!' : '📉 Küme Düştü'}`)
+        .setTitle(testTitle(test, up ? '📈 Küme Atladı' : '📉 Küme Düştü'))
         .setThumbnail(Assets.item.diamond)
         .setDescription(
           `**${clean(data.player ?? '?', 30)}** — ${clean(data.oldTier ?? '?', 20)} → `
-          + `**${clean(data.newTier ?? '?', 20)}** (${data.elo ?? '?'} ELO)`,
-        );
+          + `**${clean(data.newTier ?? '?', 20)}**`,
+        )
+        .addFields({ name: 'ELO', value: String(data.elo ?? '—'), inline: true })
+        .setTimestamp();
     }
 
     // Oyun içi /report — staff kanalına düşer.
     case 'report_created':
       return baseEmbed(Colors.danger)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}🚨 Oyuncu Raporu`)
+        .setTitle(testTitle(test, '🚨 Oyuncu Raporu'))
         .setThumbnail(Assets.block.cobweb)
         .addFields(
-          { name: '📣 Raporlayan', value: clean(data.reporter ?? '?', 30), inline: true },
-          { name: '🎯 Raporlanan', value: clean(data.reported ?? '?', 30), inline: true },
-          { name: '📝 Sebep', value: clean(data.reason || '—', 500), inline: false },
-        );
+          { name: 'Raporlanan', value: clean(data.reported ?? '?', 30), inline: true },
+          { name: 'Raporlayan', value: clean(data.reporter ?? '?', 30), inline: true },
+          { name: 'Sebep', value: clean(data.reason || '—', 500), inline: false },
+        )
+        .setTimestamp();
 
     // MC tarafı moderasyon aynası (source=discord olanlar routing'de bastırılır).
     case 'punishment': {
@@ -330,30 +360,31 @@ function eventEmbed(type, data, test) {
         unmute: 'Susturma Kaldırıldı', kick: 'Sunucudan Atıldı', warn: 'Uyarı',
       };
       const label = LABELS[data.action] ?? clean(String(data.action ?? '?'), 20);
-      const e = baseEmbed(Colors.warn)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}🔨 MC Ceza — ${label}`)
+      const e = baseEmbed(data.action === 'ban' ? Colors.danger : Colors.warn)
+        .setTitle(testTitle(test, `🔨 MC Ceza — ${label}`))
         .addFields(
-          { name: '👤 Oyuncu', value: clean(data.player ?? '?', 30), inline: true },
-          { name: '🛡️ Yetkili', value: clean(data.staff ?? '?', 30), inline: true },
+          { name: 'Oyuncu', value: clean(data.player ?? '?', 30), inline: true },
+          { name: 'Yetkili', value: clean(data.staff ?? '?', 30), inline: true },
         );
       if (data.action === 'ban' || data.action === 'mute') {
         e.addFields({
-          name: '⏱️ Süre',
+          name: 'Süre',
           value: data.durationMs ? formatSeconds(Math.round(data.durationMs / 1000)) : 'Kalıcı',
           inline: true,
         });
       }
-      e.addFields({ name: '📝 Sebep', value: clean(data.reason || '—', 500), inline: false });
-      return e;
+      return e.addFields({ name: 'Sebep', value: clean(data.reason || '—', 500), inline: false })
+        .setTimestamp();
     }
 
     // MC↔DC bağlantısı kaldırıldı (source=discord olanlar routing'de bastırılır).
     case 'link_removed':
       return baseEmbed(Colors.info)
-        .setTitle(`${test ? '🧪 TEST — ' : ''}🔗 Hesap Bağlantısı Kaldırıldı`)
+        .setTitle(testTitle(test, '🔗 Hesap Bağlantısı Kaldırıldı'))
         .setDescription(
-          `**${clean(data.mc ?? '?', 30)}** ↔ <@${data.discordId ?? '?'}> bağlantısı oyun tarafından kaldırıldı.`,
-        );
+          `\`${codeText(data.mc ?? '?', 30)}\` ↔ <@${data.discordId ?? '?'}> bağlantısı oyun tarafında kaldırıldı.`,
+        )
+        .setTimestamp();
 
     default:
       return null;

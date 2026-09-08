@@ -1,7 +1,7 @@
 import { buildAnnouncement } from './httpserver.js';
 import { dmSubscriptions } from './db.js';
 import { mcapi } from './mcapi.js';
-import { clean } from './util.js';
+import { clean, mentionUsers } from './util.js';
 
 /**
  * /maç-bildirim DM dağıtımı.
@@ -50,12 +50,14 @@ async function sendOne(client, userId, payloadBase) {
   try {
     const user = await client.users.fetch(userId);
     const mc = await linkedMcName(userId);
-    const content = `<@${userId}>`
-      + (mc ? ` — bağlı hesabın: **${clean(mc, 30)}**` : '');
+    // Kanal duyurusunun aynısı + kişisel bir satır: kimin hesabıyla katılacağı.
+    const content = mc
+      ? `<@${userId}> — bağlı hesabın: **${clean(mc, 30)}**`
+      : `<@${userId}>`;
     await user.send({
       content,
       embeds: payloadBase.embeds,
-      allowedMentions: { users: [userId] },
+      allowedMentions: mentionUsers(userId),
     });
     dmSubscriptions.clearError(userId);
     return { ok: true };

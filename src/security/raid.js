@@ -1,6 +1,6 @@
 import { getSetting, addGuardHit } from '../db.js';
 import { sendLog } from '../modlog.js';
-import { Colors } from '../embeds.js';
+import { baseEmbed, Colors, Brand } from '../embeds.js';
 
 /**
  * Raid koruması: (1) minimum hesap yaşı kapısı, (2) katılım-hızı alarmı.
@@ -55,15 +55,27 @@ export function registerRaidProtection(client) {
       // 1) Minimum hesap yaşı kapısı.
       if (accountTooYoung(member.user.createdTimestamp, cfg.minAccountAgeDays, now)) {
         addGuardHit(member.id, 'raid_age', `hesap ${cfg.minAccountAgeDays} günden yeni`);
-        await member.send('**Nautilus PvP** — Güvenlik nedeniyle çok yeni Discord hesapları '
-          + `sunucuya alınmıyor. Hesabın ${cfg.minAccountAgeDays} günü doldurduğunda tekrar bekleriz.`)
-          .catch(() => null);
+        // Kullanıcıya suçlayıcı değil, açıklayıcı bir mesaj: ne oldu, neden,
+        // ne yapabilir. Güvenlik eşikleri (limit/pencere) paylaşılmaz.
+        await member.send({
+          embeds: [baseEmbed(Colors.warn)
+            .setTitle('Sunucuya Şu An Katılamıyorsun')
+            .setDescription(`${Brand.community} sunucusu, çok yeni oluşturulmuş Discord hesaplarını `
+              + 'güvenlik gereği geçici olarak kabul etmiyor. Bu bir ceza değildir.')
+            .addFields({
+              name: 'Ne yapabilirsin',
+              value: `Hesabın ${cfg.minAccountAgeDays} günü doldurduğunda davet linkiyle tekrar katılabilirsin.\n`
+                + 'Bunun bir yanlışlık olduğunu düşünüyorsan sunucudaki bir yetkiliye ulaşabilirsin.',
+            })],
+        }).catch(() => null);
         await member.kick('Raid koruması: minimum hesap yaşı').catch(() => null);
         await sendLog(client, {
-          title: '🛡️ Raid Koruması — Yeni Hesap Engellendi',
+          title: 'Raid Koruması — Yeni Hesap Engellendi',
           color: Colors.warn,
-          description: `**${member.user.tag}** (\`${member.id}\`) — hesap `
-            + `${cfg.minAccountAgeDays} günden yeni olduğu için atıldı.`,
+          fields: [
+            { name: 'Kullanıcı', value: `${member.user.tag} (\`${member.id}\`)`, inline: true },
+            { name: 'Sebep', value: `Hesap ${cfg.minAccountAgeDays} günden yeni`, inline: true },
+          ],
         });
         return;
       }
@@ -79,17 +91,32 @@ export function registerRaidProtection(client) {
         addGuardHit(member.id, 'raid_join', `${cfg.windowSecs}sn penceresinde yoğun katılım`);
         if (freshAlarm) {
           await sendLog(client, {
-            title: '🚨 RAID ALARMI',
+            title: 'Raid Alarmı',
             color: Colors.danger,
-            description: `${cfg.windowSecs} saniyede ${cfg.joinLimit}+ katılım algılandı. `
-              + `Raid modu ${Math.round((windowMs * 2) / 1000)} sn aktif — yeni katılımlar `
-              + `${cfg.action === 'kick' ? 'ATILACAK' : 'yalnız loglanacak'}. `
-              + '`/admin raidkoruma` ile yönetebilirsin.',
+            description: 'Kısa sürede olağan dışı sayıda katılım algılandı, raid modu devreye girdi.',
+            fields: [
+              { name: 'Algılanan', value: `${cfg.windowSecs} sn içinde ${cfg.joinLimit}+ katılım`, inline: true },
+              { name: 'Raid modu', value: `${Math.round((windowMs * 2) / 1000)} sn aktif`, inline: true },
+              {
+                name: 'Yeni katılımlar',
+                value: cfg.action === 'kick' ? 'Otomatik atılıyor' : 'Yalnız kaydediliyor',
+                inline: true,
+              },
+              { name: 'Yönetim', value: '`/admin raidkoruma` ile ayarları değiştirebilirsin.', inline: false },
+            ],
           }).catch(() => null);
         }
         if (cfg.action === 'kick') {
-          await member.send('**Nautilus PvP** — Şu anda yoğun katılım koruması aktif. '
-            + 'Birkaç dakika sonra tekrar katılmayı dene.').catch(() => null);
+          await member.send({
+            embeds: [baseEmbed(Colors.warn)
+              .setTitle('Katılım Geçici Olarak Kısıtlandı')
+              .setDescription(`${Brand.community} sunucusunda şu anda yoğun katılım koruması aktif. `
+                + 'Bu bir ceza değildir ve seninle ilgili bir kayıt oluşturmaz.')
+              .addFields({
+                name: 'Ne yapabilirsin',
+                value: 'Birkaç dakika sonra davet linkiyle tekrar katılmayı deneyebilirsin.',
+              })],
+          }).catch(() => null);
           await member.kick('Raid koruması: toplu katılım').catch(() => null);
         }
       }

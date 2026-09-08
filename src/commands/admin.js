@@ -3,10 +3,12 @@ import {
   ChannelType,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { okEmbed, errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
+import {
+  okEmbed, errEmbed, baseEmbed, brandFooter, Colors, Assets, Brand, bridgeErrorEmbed,
+} from '../embeds.js';
 import { getSetting, setSetting, addCase } from '../db.js';
 import { config } from '../config.js';
-import { clean } from '../util.js';
+import { clean, codeText } from '../util.js';
 import { ranks, upsertRank, removeRank, resetRanks } from '../ranks.js';
 import {
   TIER_ROLE_SPECS, ensureTierRoles, setTierRole, roleMap, syncMemberTierRole,
@@ -21,7 +23,7 @@ import { ticketPanelComponents } from '../tickets.js';
 import { TICKET_TYPES } from '../ticketcore.js';
 
 function parseColor(input) {
-  if (!input) return Colors.main;
+  if (!input) return Colors.brand;
   const hex = input.replace(/^#/, '');
   const value = Number.parseInt(hex, 16);
   return Number.isFinite(value) && hex.length === 6 ? value : Colors.main;
@@ -39,7 +41,11 @@ async function handleEloRank(interaction, sub) {
         + (roleId ? ` • <@&${roleId}>` : '');
     });
     return interaction.reply({
-      embeds: [baseEmbed(Colors.main).setTitle('🏆 ELO Rank Kademeleri').setDescription(lines.join('\n'))],
+      embeds: [baseEmbed(Colors.brand)
+        .setTitle('🏆 ELO Rank Kademeleri')
+        .setDescription(lines.join('\n'))
+        .setFooter(brandFooter(`${list.length} kademe`))],
+      ephemeral: true,
     });
   }
   if (sub === 'rolkur') {
@@ -47,7 +53,7 @@ async function handleEloRank(interaction, sub) {
     await interaction.deferReply();
     const res = await ensureTierRoles(interaction.guild);
     if (!res.ok) {
-      return interaction.editReply({ embeds: [errEmbed(res.error)] });
+      return interaction.editReply({ embeds: [errEmbed(res.error, 'Roller Hazırlanamadı')] });
     }
     addCase('elorank_roles', null, interaction.user.id, null,
       res.results.filter((r) => r.created).length + ' yeni rol');
@@ -55,11 +61,13 @@ async function handleEloRank(interaction, sub) {
     return interaction.editReply({
       embeds: [baseEmbed(Colors.success)
         .setTitle('🎨 ELO Tier Rolleri Hazır')
-        .setDescription(lines.join('\n')
-          + '\n\n🆕 = yeni oluşturuldu, ♻️ = mevcut rol kullanıldı. '
-          + 'Rol renkleri tier kimliğine göre ayarlandı. '
-          + 'Botun rolünün bu rollerin **üstünde** olduğundan emin ol; '
-          + 'ardından `/admin elorank senkron` ile herkese dağıt.')],
+        .setDescription(lines.join('\n'))
+        .addFields({
+          name: 'Sıradaki adım',
+          value: 'Botun rolünü bu rollerin **üstüne** taşı, ardından '
+            + '`/admin elorank senkron` ile bağlı hesaplara dağıt.',
+        })
+        .setFooter(brandFooter('🆕 yeni oluşturuldu • ♻️ mevcut rol kullanıldı'))],
     });
   }
   if (sub === 'rol') {
@@ -68,27 +76,31 @@ async function handleEloRank(interaction, sub) {
     const me = interaction.guild.members.me;
     if (role.managed || role.position >= me.roles.highest.position) {
       return interaction.reply({
-        embeds: [errEmbed(`${role} eşlenemez: yönetilen rol ya da botun rolünün üstünde.`)],
+        embeds: [errEmbed(`${role} eşlenemiyor: yönetilen bir rol ya da botun rolünün üstünde.`,
+          'Rol Eşlenemedi')],
         ephemeral: true,
       });
     }
     setTierRole(tierName, role.id);
     addCase('elorank_role_map', null, interaction.user.id, null, `${tierName} → ${role.id}`);
     return interaction.reply({
-      embeds: [okEmbed(`🎨 **${clean(tierName, 20)}** kademesi ${role} rolüne eşlendi.`)],
+      embeds: [okEmbed(`**${clean(tierName, 20)}** kademesindeki oyuncular artık ${role} rolünü alacak.`,
+        '🎨 Tier Rolü Eşlendi')],
+      ephemeral: true,
     });
   }
   if (sub === 'senkron') {
     if (!Object.keys(roleMap()).length) {
       return interaction.reply({
-        embeds: [errEmbed('Önce `/admin elorank rolkur` ile tier rollerini kur.')],
+        embeds: [errEmbed('Tier rolleri henüz kurulmamış.\nÖnce `/admin elorank rolkur` komutunu çalıştır.',
+          'Rol Eşlemesi Yok')],
         ephemeral: true,
       });
     }
     await interaction.deferReply();
     const res = await mcapi.links();
     if (!res.ok) {
-      return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+      return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'bağlantı listesi' })] });
     }
     const links = (res.links ?? []).filter((l) => l.discordId && l.tier);
     let synced = 0;
@@ -108,11 +120,13 @@ async function handleEloRank(interaction, sub) {
     addCase('elorank_bulk_sync', null, interaction.user.id, null,
       `${synced} güncellendi / ${links.length} bağlantı`);
     return interaction.editReply({
-      embeds: [okEmbed(`🔄 Toplu tier rol senkronu bitti.\n`
-        + `• Güncellenen: **${synced}**\n`
-        + `• Değişiklik gerekmeyen/atlanan: **${skipped}**\n`
-        + `• Hata: **${failed}**\n`
-        + `• Toplam bağlantı: **${links.length}**`)],
+      embeds: [okEmbed('Bağlı tüm hesapların tier rolleri güncel.', '🔄 Tier Senkronu Tamamlandı')
+        .addFields(
+          { name: 'Güncellenen', value: String(synced), inline: true },
+          { name: 'Değişiklik gerekmeyen', value: String(skipped), inline: true },
+          { name: 'Hata', value: String(failed), inline: true },
+          { name: 'Toplam bağlantı', value: String(links.length), inline: true },
+        )],
     });
   }
   if (sub === 'ekle') {
@@ -122,24 +136,33 @@ async function handleEloRank(interaction, sub) {
     const list = upsertRank(name, min, emoji);
     addCase('elorank_set', null, interaction.user.id, `${name} >= ${min}`);
     return interaction.reply({
-      embeds: [okEmbed(`🏅 **${clean(name, 30)}** kademesi ayarlandı (min ${min} ELO). Toplam ${list.length} kademe.`)],
+      embeds: [okEmbed(`**${clean(name, 30)}** kademesi **${min} ELO** ve üzeri için geçerli. `
+        + `Toplam ${list.length} kademe var.`, '🏅 Kademe Kaydedildi')],
+      ephemeral: true,
     });
   }
   if (sub === 'sil') {
     const name = interaction.options.getString('isim', true).trim();
     if (!removeRank(name)) {
       return interaction.reply({
-        embeds: [errEmbed(`**${clean(name, 30)}** adında bir kademe yok (veya son kademe silinemez).`)],
+        embeds: [errEmbed(`**${clean(name, 30)}** adında bir kademe bulunamadı. `
+          + 'Son kalan kademe silinemez.', 'Kademe Silinemedi')],
         ephemeral: true,
       });
     }
     addCase('elorank_del', null, interaction.user.id, name);
-    return interaction.reply({ embeds: [okEmbed(`🗑️ **${clean(name, 30)}** kademesi silindi.`)] });
+    return interaction.reply({
+      embeds: [okEmbed(`**${clean(name, 30)}** kademesi listeden kaldırıldı.`, '🗑️ Kademe Silindi')],
+      ephemeral: true,
+    });
   }
   // sıfırla
   resetRanks();
   addCase('elorank_reset', null, interaction.user.id, null);
-  return interaction.reply({ embeds: [okEmbed('🔄 Rank kademeleri varsayılana döndürüldü.')] });
+  return interaction.reply({
+    embeds: [okEmbed('Rank kademeleri fabrika ayarlarına döndü.', '🔄 Kademeler Sıfırlandı')],
+    ephemeral: true,
+  });
 }
 
 /** /admin rolpanel — buttons that toggle safe roles. */
@@ -158,26 +181,30 @@ async function handleRolePanel(interaction) {
     ]);
     if (role.managed || dangerous || role.position >= me.roles.highest.position) {
       return interaction.reply({
-        embeds: [errEmbed(`${role} paneli için uygun değil (yönetilen/yetkili rol ya da botun üstünde).`)],
+        embeds: [errEmbed(`${role} panele eklenemez: yetki taşıyan, yönetilen ya da botun rolünün `
+          + 'üstünde bir rol.', 'Rol Panele Uygun Değil')],
         ephemeral: true,
       });
     }
   }
 
   const title = interaction.options.getString('başlık') ?? '🎭 Rol Seçimi';
-  const embed = baseEmbed(Colors.main)
+  const embed = baseEmbed(Colors.brand)
     .setTitle(clean(title, 200))
-    .setDescription('Aşağıdaki butonlara tıklayarak rolleri alabilir veya bırakabilirsin:\n\n'
-      + roles.map((r) => `• ${r}`).join('\n'));
+    .setDescription('İstediğin rolü almak için butona tıkla. Tekrar tıklayınca rol geri alınır.')
+    .addFields({ name: 'Roller', value: roles.map((r) => `• ${r}`).join('\n') });
   const row = new ActionRowBuilder().addComponents(
     roles.map((r) => new ButtonBuilder()
       .setCustomId(`role:${r.id}`)
       .setLabel(r.name.slice(0, 80))
       .setStyle(ButtonStyle.Secondary)),
   );
-  await channel.send({ embeds: [embed], components: [row] });
+  await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
   addCase('role_panel', null, interaction.user.id, null, `#${channel.name} (${roles.length} rol)`);
-  return interaction.reply({ embeds: [okEmbed(`🎭 Rol paneli ${channel} kanalına gönderildi.`)], ephemeral: true });
+  return interaction.reply({
+    embeds: [okEmbed(`${roles.length} rollük panel ${channel} kanalına gönderildi.`, '🎭 Rol Paneli Gönderildi')],
+    ephemeral: true,
+  });
 }
 
 export default [
@@ -185,7 +212,7 @@ export default [
     tier: Tier.ADMIN,
     data: new SlashCommandBuilder()
       .setName('admin')
-      .setDescription('Bot yönetim komutları')
+      .setDescription('Bot ayarlarını ve panellerini yönetir')
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addSubcommand((s) => s.setName('dclinkgönder')
         .setDescription('Hesap bağlama panelini link kanalına gönderir'))
@@ -194,20 +221,20 @@ export default [
         .addChannelOption((o) => o.setName('kanal').setDescription('Log kanalı')
           .addChannelTypes(ChannelType.GuildText).setRequired(true)))
       .addSubcommand((s) => s.setName('mackanal')
-        .setDescription('Maç duyuru kanalını ayarlar (planlama/başlama/sonuç embedleri)')
+        .setDescription('Maç duyurularının gönderileceği kanalı ayarlar')
         .addChannelOption((o) => o.setName('kanal').setDescription('Maç duyuru kanalı')
           .addChannelTypes(ChannelType.GuildText).setRequired(true)))
       .addSubcommand((s) => s.setName('koruma')
-        .setDescription('Patlama korumasını (anti-nuke) yönetir')
-        .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
+        .setDescription('Sunucuyu yıkıcı işlemlere karşı koruyan sistemi yönetir')
+        .addStringOption((o) => o.setName('durum').setDescription('Yapılacak işlem')
           .addChoices(
             { name: 'aç', value: 'on' },
             { name: 'kapat', value: 'off' },
             { name: 'durum', value: 'status' },
           ).setRequired(true)))
       .addSubcommand((s) => s.setName('automod')
-        .setDescription('Automod\'u (spam/davet/etiket filtresi) açar veya kapatır')
-        .addStringOption((o) => o.setName('durum').setDescription('aç / kapat')
+        .setDescription('Sohbet filtresini (spam, davet linki, toplu etiket) açar veya kapatır')
+        .addStringOption((o) => o.setName('durum').setDescription('Yapılacak işlem')
           .addChoices({ name: 'aç', value: 'on' }, { name: 'kapat', value: 'off' }).setRequired(true)))
       .addSubcommand((s) => s.setName('hoşgeldin')
         .setDescription('Hoş geldin mesajı kanalını ayarlar veya kapatır')
@@ -230,7 +257,7 @@ export default [
         .addStringOption((o) => o.setName('tür').setDescription('Yalnız bu talep türü için (boş = genel varsayılan)')
           .addChoices(...Object.entries(TICKET_TYPES).map(([value, t]) => ({ name: t.label, value })))))
       .addSubcommand((s) => s.setName('destekmodu')
-        .setDescription('Destek (ticket) sistemini açar veya kapatır')
+        .setDescription('Destek sistemini açar veya kapatır')
         .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
           .addChoices(
             { name: 'aç', value: 'on' },
@@ -238,7 +265,7 @@ export default [
             { name: 'durum', value: 'status' },
           ).setRequired(true)))
       .addSubcommand((s) => s.setName('rolpanel')
-        .setDescription('Buton ile alınıp bırakılabilen rol paneli gönderir (en fazla 5 rol)')
+        .setDescription('Butonla alınıp bırakılan rol paneli gönderir (en fazla 5 rol)')
         .addChannelOption((o) => o.setName('kanal').setDescription('Panel kanalı')
           .addChannelTypes(ChannelType.GuildText).setRequired(true))
         .addRoleOption((o) => o.setName('rol1').setDescription('1. rol').setRequired(true))
@@ -248,7 +275,7 @@ export default [
         .addRoleOption((o) => o.setName('rol5').setDescription('5. rol'))
         .addStringOption((o) => o.setName('başlık').setDescription('Panel başlığı')))
       .addSubcommand((s) => s.setName('staffkanal')
-        .setDescription('Rapor/ceza aynası eventlerinin düşeceği staff kanalını ayarlar')
+        .setDescription('Oyun içi rapor ve ceza bildirimlerinin kanalını ayarlar')
         .addChannelOption((o) => o.setName('kanal').setDescription('Staff kanalı (boş bırak = kapat)')
           .addChannelTypes(ChannelType.GuildText)))
       .addSubcommand((s) => s.setName('rankkanal')
@@ -257,12 +284,12 @@ export default [
           .setDescription('Rank kanalı (boş bırak = maç kanalına düşer)')
           .addChannelTypes(ChannelType.GuildText)))
       .addSubcommand((s) => s.setName('durumkanal')
-        .setDescription('Oto-güncellenen sunucu durum panosunun kanalını ayarlar')
+        .setDescription('Canlı sunucu durum panosunun kanalını ayarlar')
         .addChannelOption((o) => o.setName('kanal')
           .setDescription('Durum kanalı (boş bırak = kapat)')
           .addChannelTypes(ChannelType.GuildText)))
       .addSubcommand((s) => s.setName('uyarıeşiği')
-        .setDescription('Uyarı sayısına göre otomatik yaptırım eşiklerini ayarlar')
+        .setDescription('Uyarı sayısına bağlı otomatik yaptırım eşiklerini ayarlar')
         .addStringOption((o) => o.setName('tür').setDescription('Eşik türü').setRequired(true)
           .addChoices(
             { name: 'timeout (susturma)', value: 'timeout' },
@@ -271,11 +298,11 @@ export default [
             { name: 'durum', value: 'durum' },
           ))
         .addIntegerOption((o) => o.setName('adet')
-          .setDescription('Kaç uyarıda tetiklensin (timeout/ban için)').setMinValue(1).setMaxValue(50))
+          .setDescription('Kaç uyarıda tetiklensin').setMinValue(1).setMaxValue(50))
         .addStringOption((o) => o.setName('süre')
-          .setDescription('timeout süresi (örn. 1sa, 1g) — yalnız timeout türünde')))
+          .setDescription('Susturma süresi, örn: 1sa, 1g')))
       .addSubcommand((s) => s.setName('raidkoruma')
-        .setDescription('Raid korumasını (katılım hızı + min hesap yaşı) yönetir')
+        .setDescription('Toplu katılım korumasını yönetir')
         .addStringOption((o) => o.setName('durum').setDescription('aç / kapat / durum')
           .addChoices(
             { name: 'aç', value: 'on' },
@@ -293,17 +320,17 @@ export default [
       .addSubcommandGroup((g) => g.setName('elorank')
         .setDescription('ELO rank kademelerini yönetir')
         .addSubcommand((s) => s.setName('liste').setDescription('Mevcut rank kademelerini listeler'))
-        .addSubcommand((s) => s.setName('ekle').setDescription('Rank kademesi ekler/günceller')
-          .addStringOption((o) => o.setName('isim').setDescription('Rank adı (örn. Elmas)').setRequired(true))
+        .addSubcommand((s) => s.setName('ekle').setDescription('Rank kademesi ekler veya günceller')
+          .addStringOption((o) => o.setName('isim').setDescription('Rank adı (örn: Elmas)').setRequired(true))
           .addIntegerOption((o) => o.setName('min-elo').setDescription('Bu rank için alt ELO sınırı').setRequired(true))
-          .addStringOption((o) => o.setName('emoji').setDescription('Rank emojisi (örn. 💎)')))
+          .addStringOption((o) => o.setName('emoji').setDescription('Rank emojisi (örn: 💎)')))
         .addSubcommand((s) => s.setName('sil').setDescription('Rank kademesini siler')
           .addStringOption((o) => o.setName('isim').setDescription('Silinecek rank adı').setRequired(true)))
         .addSubcommand((s) => s.setName('sıfırla').setDescription('Rank kademelerini varsayılana döndürür'))
         .addSubcommand((s) => s.setName('rolkur')
-          .setDescription('6 tier rolünü uygun renklerle otomatik oluşturur/eşler'))
+          .setDescription('Tier rollerini uygun renklerle oluşturur ve eşler'))
         .addSubcommand((s) => s.setName('rol')
-          .setDescription('Bir tier\'ı mevcut bir Discord rolüne elle eşler')
+          .setDescription('Bir tier kademesini mevcut bir role eşler')
           .addStringOption((o) => o.setName('isim').setDescription('Tier adı').setRequired(true)
             .addChoices(...TIER_ROLE_SPECS.map((t) => ({ name: t.name, value: t.name }))))
           .addRoleOption((o) => o.setName('rol').setDescription('Eşlenecek rol').setRequired(true)))
@@ -322,7 +349,11 @@ export default [
         setSetting('automod_enabled', enable ? '1' : '0');
         addCase('automod_toggle', null, interaction.user.id, enable ? 'açıldı' : 'kapatıldı');
         return interaction.reply({
-          embeds: [okEmbed(enable ? '🤖 Automod **açıldı**.' : '⚠️ Automod **kapatıldı**.')],
+          embeds: [enable
+            ? okEmbed('Spam, davet linki ve toplu etiket filtresi tekrar çalışıyor.', '🤖 Automod Açıldı')
+            : baseEmbed(Colors.warn).setTitle('⚠️ Automod Kapatıldı')
+              .setDescription('Sohbet filtreleri devre dışı. `/admin automod aç` ile geri açabilirsin.')],
+          ephemeral: true,
         });
       }
 
@@ -332,8 +363,10 @@ export default [
         addCase('welcome_channel', null, interaction.user.id, null, channel?.id ?? 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(channel
-            ? `👋 Hoş geldin mesajları ${channel} kanalına gönderilecek.`
-            : '👋 Hoş geldin mesajları kapatıldı.')],
+            ? `Yeni üyeler ${channel} kanalında karşılanacak.`
+            : 'Yeni üyeler artık karşılama mesajı almayacak.',
+          channel ? '👋 Karşılama Açıldı' : '👋 Karşılama Kapatıldı')],
+          ephemeral: true,
         });
       }
 
@@ -343,8 +376,11 @@ export default [
         addCase('match_ping_role', null, interaction.user.id, null, role?.id ?? 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(role
-            ? `📣 Maç duyurularında ${role} etiketlenecek. (Rolü rol panelinden aldırabilirsin.)`
-            : '📣 Maç duyuru etiketi kapatıldı.')],
+            ? `Maç planlandı ve maç başladı duyurularında ${role} etiketlenecek.\n`
+              + 'Üyeler bu rolü `/admin rolpanel` ile kurduğun panelden alabilir.'
+            : 'Maç duyurularında artık rol etiketlenmeyecek.',
+          role ? '📣 Duyuru Rolü Ayarlandı' : '📣 Duyuru Rolü Kapatıldı')],
+          ephemeral: true,
         });
       }
 
@@ -354,8 +390,10 @@ export default [
         addCase('autorole_id', null, interaction.user.id, null, role?.id ?? 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(role
-            ? `🎟️ Sunucuya katılan herkese ${role} rolü verilecek.`
-            : '🎟️ Otorol kapatıldı.')],
+            ? `Sunucuya katılan her üyeye ${role} rolü otomatik verilecek.`
+            : 'Yeni üyelere artık otomatik rol verilmeyecek.',
+          role ? '🎟️ Otorol Açıldı' : '🎟️ Otorol Kapatıldı')],
+          ephemeral: true,
         });
       }
 
@@ -365,8 +403,10 @@ export default [
         addCase('staff_channel', null, interaction.user.id, null, channel?.id ?? 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(channel
-            ? `🛡️ Oyun içi raporlar ve ceza aynaları ${channel} kanalına düşecek.`
-            : '🛡️ Staff event kanalı kapatıldı — rapor/ceza eventleri duyurulmayacak.')],
+            ? `Oyun içi raporlar ve MC ceza aynaları ${channel} kanalına düşecek.`
+            : 'Rapor ve ceza aynaları artık hiçbir kanala düşmeyecek.',
+          channel ? '🛡️ Staff Kanalı Ayarlandı' : '🛡️ Staff Kanalı Kapatıldı')],
+          ephemeral: true,
         });
       }
 
@@ -376,8 +416,10 @@ export default [
         addCase('rank_channel', null, interaction.user.id, null, channel?.id ?? 'varsayılan');
         return interaction.reply({
           embeds: [okEmbed(channel
-            ? `📈 ELO küme değişimleri ${channel} kanalında duyurulacak.`
-            : '📈 Rank kanalı ayarı kaldırıldı — duyurular maç kanalına düşer.')],
+            ? `Küme atlama ve düşme duyuruları ${channel} kanalında yayınlanacak.`
+            : 'Küme duyuruları yeniden maç kanalına düşecek.',
+          '📈 Rank Kanalı Güncellendi')],
+          ephemeral: true,
         });
       }
 
@@ -388,8 +430,10 @@ export default [
         addCase('status_channel', null, interaction.user.id, null, channel?.id ?? 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(channel
-            ? `📊 Durum panosu ${channel} kanalında ~60 sn'de bir güncellenecek.`
-            : '📊 Durum panosu kapatıldı.')],
+            ? `Canlı durum panosu ${channel} kanalına kurulacak ve yaklaşık dakikada bir kendini güncelleyecek.`
+            : 'Durum panosu kapatıldı; mevcut pano mesajı artık güncellenmeyecek.',
+          channel ? '📊 Durum Panosu Açıldı' : '📊 Durum Panosu Kapatıldı')],
+          ephemeral: true,
         });
       }
 
@@ -399,11 +443,17 @@ export default [
         if (tur) {
           setSetting(`ticket_category_${tur}`, category.id);
           return interaction.reply({
-            embeds: [okEmbed(`🎫 **${TICKET_TYPES[tur]?.label ?? tur}** talepleri **${category.name}** kategorisinde açılacak.`)],
+            embeds: [okEmbed(`**${TICKET_TYPES[tur]?.label ?? tur}** talepleri artık `
+              + `**${codeText(category.name, 60)}** kategorisinde açılacak.`, '🎫 Kategori Ayarlandı')],
+            ephemeral: true,
           });
         }
         setSetting('ticket_category', category.id);
-        return interaction.reply({ embeds: [okEmbed(`🎫 Destek talepleri **${category.name}** kategorisinde açılacak.`)] });
+        return interaction.reply({
+          embeds: [okEmbed(`Tür bazlı ayarı olmayan tüm talepler **${codeText(category.name, 60)}** `
+            + 'kategorisinde açılacak.', '🎫 Kategori Ayarlandı')],
+          ephemeral: true,
+        });
       }
 
       if (sub === 'destekmodu') {
@@ -411,9 +461,11 @@ export default [
         if (durum === 'status') {
           const on = getSetting('tickets_enabled', '1') === '1';
           return interaction.reply({
-            embeds: [baseEmbed(on ? Colors.success : Colors.danger)
-              .setTitle('🎫 Destek Sistemi')
-              .setDescription(`Durum: **${on ? 'AÇIK' : 'KAPALI'}**`)],
+            embeds: [baseEmbed(on ? Colors.success : Colors.neutral)
+              .setTitle(on ? '🎫 Destek Sistemi Açık' : '🎫 Destek Sistemi Kapalı')
+              .setDescription(on
+                ? 'Üyeler panel ve `/destek aç` üzerinden talep oluşturabiliyor.'
+                : 'Panel ve komut üzerinden yeni talep açılamıyor. Açık talepler çalışmaya devam eder.')],
             ephemeral: true,
           });
         }
@@ -422,21 +474,34 @@ export default [
         addCase('tickets_toggle', null, interaction.user.id, null, enable ? 'açık' : 'kapalı');
         return interaction.reply({
           embeds: [okEmbed(enable
-            ? '🎫 Destek sistemi **açıldı** — panel ve komutlar tekrar kullanılabilir.'
-            : '🎫 Destek sistemi **kapatıldı** — panel etkileşimleri reddedilecek.')],
+            ? 'Üyeler yeniden destek talebi açabilir.'
+            : 'Yeni talep açılamayacak; açık talepler kapanana kadar çalışmaya devam eder.',
+          enable ? '🎫 Destek Sistemi Açıldı' : '🎫 Destek Sistemi Kapatıldı')],
+          ephemeral: true,
         });
       }
 
       if (sub === 'ticketpanel') {
         const channel = interaction.options.getChannel('kanal', true);
-        const embed = baseEmbed(Colors.main)
-          .setTitle('🎫 Destek Talebi')
-          .setDescription('Bir sorunun mu var? Aşağıdaki menüden **konuya uygun türü seç**, açılan forma '
-            + 'konu ve açıklamanı yaz — sana özel bir destek kanalı açılır.\n\n'
-            + 'Talebini yalnızca sen ve yetkililer görebilir.');
-        await channel.send({ embeds: [embed], components: ticketPanelComponents() });
+        const embed = baseEmbed(Colors.brand)
+          .setTitle('🎫 Destek Talebi Aç')
+          .setThumbnail(Assets.mark)
+          .setDescription('Bir sorun mu yaşıyorsun? Aşağıdaki menüden konunu seç, açılan forma kısa bir '
+            + 'açıklama yaz — sana özel bir destek kanalı açılır.')
+          .addFields({
+            name: 'Bilmen gerekenler',
+            value: '• Talebini yalnızca sen ve yetkililer görebilir.\n'
+              + '• Aynı anda bir açık talebin olabilir.\n'
+              + '• Kapanışta konuşmanın kaydı sana DM olarak gönderilir.',
+          });
+        await channel.send({
+          embeds: [embed], components: ticketPanelComponents(), allowedMentions: { parse: [] },
+        });
         addCase('ticket_panel', null, interaction.user.id, null, `#${channel.name}`);
-        return interaction.reply({ embeds: [okEmbed(`✅ Destek paneli ${channel} kanalına gönderildi.`)], ephemeral: true });
+        return interaction.reply({
+          embeds: [okEmbed(`Destek paneli ${channel} kanalına gönderildi.`, '🎫 Panel Gönderildi')],
+          ephemeral: true,
+        });
       }
 
       if (sub === 'rolpanel') {
@@ -446,40 +511,61 @@ export default [
       if (sub === 'dclinkgönder') {
         const channel = await interaction.client.channels.fetch(config.linkChannelId).catch(() => null);
         if (!channel?.isTextBased()) {
-          return interaction.reply({ embeds: [errEmbed(`Link kanalına ulaşamıyorum (<#${config.linkChannelId}>).`)], ephemeral: true });
+          return interaction.reply({
+            embeds: [errEmbed(`<#${config.linkChannelId}> kanalına ulaşamıyorum. `
+              + 'Kanal silinmiş olabilir ya da botun görme izni yok.', 'Kanala Ulaşılamadı')],
+            ephemeral: true,
+          });
         }
-        const embed = baseEmbed(Colors.main)
+        const embed = baseEmbed(Colors.brand)
           .setTitle('🔗 Minecraft Hesabını Bağla')
           .setThumbnail(Assets.item.enderPearl)
           .setImage(Assets.wordmarkScene)
-          .setDescription(
-            'Nautilus PvP maçlarına katılmak için Minecraft hesabını Discord hesabına bağlaman **zorunludur**.\n\n'
-            + '**Nasıl yapılır?**\n'
-            + '1️⃣ `nautilusuhc.com` sunucusuna gir.\n'
-            + '2️⃣ Sohbete `/link` yaz — sana tek kullanımlık bir kod verilecek.\n'
-            + '3️⃣ Aşağıdaki **Hesap Bağla** butonuna tıkla ve kodu gir.\n\n'
-            + 'Zaten bağlıysan `/link` komutu sana hangi hesapla bağlı olduğunu söyler. '
-            + 'Bir yanlışlık olduğunu düşünüyorsan destek talebi aç.');
+          .setDescription(`Maçlara katılmak ve istatistik biriktirmek için hesabını bağlaman gerekiyor. `
+            + 'İki dakikadan kısa sürer.')
+          .addFields(
+            {
+              name: 'Üç adımda bağla',
+              value: `**1.** \`${Brand.domain}\` sunucusuna gir ve sohbete \`/link\` yaz.\n`
+                + '**2.** Sana verilen tek kullanımlık kodu kopyala.\n'
+                + '**3.** Aşağıdaki **Hesap Bağla** butonuna tıklayıp kodu gir.',
+            },
+            {
+              name: 'Zaten bağladıysan',
+              value: '`/link` komutu hangi hesapla eşleştiğini gösterir. '
+                + 'Bir yanlışlık varsa `/destek aç` ile talep oluşturabilirsin.',
+            },
+          );
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('link:open').setLabel('Hesap Bağla').setEmoji('🔗').setStyle(ButtonStyle.Primary),
         );
-        await channel.send({ embeds: [embed], components: [row] });
+        await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
         addCase('link_panel', null, interaction.user.id, null, `#${channel.name}`);
-        return interaction.reply({ embeds: [okEmbed(`✅ Bağlantı paneli ${channel} kanalına gönderildi.`)], ephemeral: true });
+        return interaction.reply({
+          embeds: [okEmbed(`Hesap bağlama paneli ${channel} kanalına gönderildi.`, '🔗 Panel Gönderildi')],
+          ephemeral: true,
+        });
       }
 
       if (sub === 'logkanal') {
         const channel = interaction.options.getChannel('kanal', true);
         setSetting('log_channel', channel.id);
         addCase('log_channel', null, interaction.user.id, null, channel.id);
-        return interaction.reply({ embeds: [okEmbed(`📋 Log kanalı ${channel} olarak ayarlandı.`)] });
+        return interaction.reply({
+          embeds: [okEmbed(`Moderasyon ve güvenlik kayıtları ${channel} kanalına düşecek.`, '📋 Log Kanalı Ayarlandı')],
+          ephemeral: true,
+        });
       }
 
       if (sub === 'mackanal') {
         const channel = interaction.options.getChannel('kanal', true);
         setSetting('match_channel', channel.id);
         addCase('match_channel', null, interaction.user.id, null, channel.id);
-        return interaction.reply({ embeds: [okEmbed(`⚔️ Maç duyuru kanalı ${channel} olarak ayarlandı.`)] });
+        return interaction.reply({
+          embeds: [okEmbed(`Maç planlama, başlangıç ve sonuç duyuruları ${channel} kanalında yayınlanacak.`,
+            '⚔️ Maç Kanalı Ayarlandı')],
+          ephemeral: true,
+        });
       }
 
       if (sub === 'uyarıeşiği') {
@@ -487,41 +573,59 @@ export default [
         if (tur === 'durum') {
           const cfg = escalationConfig();
           const t = cfg.timeout?.count
-            ? `${cfg.timeout.count} uyarı → ${formatDuration(cfg.timeout.durationMs || 3_600_000)} timeout`
-            : 'kapalı';
-          const b = cfg.ban?.count ? `${cfg.ban.count} uyarı → ban` : 'kapalı';
+            ? `${cfg.timeout.count} uyarı → ${formatDuration(cfg.timeout.durationMs || 3_600_000)} susturma`
+            : 'Kapalı';
+          const b = cfg.ban?.count ? `${cfg.ban.count} uyarı → ban` : 'Kapalı';
           return interaction.reply({
-            embeds: [baseEmbed(Colors.main).setTitle('⚙️ Uyarı Eşikleri')
-              .setDescription(`⏱️ **Timeout:** ${t}\n🔨 **Ban:** ${b}`)],
+            embeds: [baseEmbed(Colors.brand).setTitle('⚙️ Otomatik Uyarı Yaptırımları')
+              .setDescription('Bir kullanıcının toplam uyarısı eşiğe ulaştığında yaptırım kendiliğinden uygulanır.')
+              .addFields(
+                { name: 'Susturma eşiği', value: t, inline: true },
+                { name: 'Ban eşiği', value: b, inline: true },
+              )],
             ephemeral: true,
           });
         }
         if (tur === 'kapat') {
           clearEscalation();
           addCase('warn_threshold', null, interaction.user.id, null, 'kapatıldı');
-          return interaction.reply({ embeds: [okEmbed('⚙️ Otomatik uyarı yaptırımları kapatıldı.')] });
+          return interaction.reply({
+            embeds: [okEmbed('Uyarı sayısına bağlı otomatik susturma ve ban devre dışı.',
+              '⚙️ Otomatik Yaptırım Kapatıldı')],
+            ephemeral: true,
+          });
         }
         const adet = interaction.options.getInteger('adet');
         if (!adet) {
-          return interaction.reply({ embeds: [errEmbed('Eşik için `adet` gerekli.')], ephemeral: true });
+          return interaction.reply({
+            embeds: [errEmbed('Eşiği kurmak için `adet` seçeneğini de doldurman gerekiyor.', 'Eksik Bilgi')],
+            ephemeral: true,
+          });
         }
         if (tur === 'timeout') {
           const rawSure = interaction.options.getString('süre');
           const durationMs = rawSure ? parseDuration(rawSure) : 3_600_000;
           if (!durationMs) {
-            return interaction.reply({ embeds: [errEmbed('Süre anlaşılamadı. Örnek: `1sa`, `1g`.')], ephemeral: true });
+            return interaction.reply({
+              embeds: [errEmbed('Süreyi anlayamadım. Örnek: `1sa`, `1g`.', 'Geçersiz Süre')],
+              ephemeral: true,
+            });
           }
           setTimeoutThreshold(adet, durationMs);
           addCase('warn_threshold', null, interaction.user.id, null, `timeout ${adet} → ${formatDuration(durationMs)}`);
           return interaction.reply({
-            embeds: [okEmbed(`⏱️ **${adet}** uyarıya ulaşan kullanıcı otomatik **${formatDuration(durationMs)}** susturulacak.`)],
+            embeds: [okEmbed(`**${adet}** uyarıya ulaşan kullanıcı otomatik olarak `
+              + `**${formatDuration(durationMs)}** susturulacak.`, '⏱️ Susturma Eşiği Ayarlandı')],
+            ephemeral: true,
           });
         }
         // ban
         setBanThreshold(adet);
         addCase('warn_threshold', null, interaction.user.id, null, `ban ${adet}`);
         return interaction.reply({
-          embeds: [okEmbed(`🔨 **${adet}** uyarıya ulaşan kullanıcı otomatik yasaklanacak.`)],
+          embeds: [okEmbed(`**${adet}** uyarıya ulaşan kullanıcı otomatik olarak yasaklanacak.`,
+            '🔨 Ban Eşiği Ayarlandı')],
+          ephemeral: true,
         });
       }
 
@@ -530,12 +634,24 @@ export default [
         if (durum === 'status') {
           const s = raidSettings();
           return interaction.reply({
-            embeds: [baseEmbed(s.enabled ? Colors.success : Colors.danger)
-              .setTitle('🛡️ Raid Koruması')
-              .setDescription(`Durum: **${s.enabled ? 'AÇIK' : 'KAPALI'}**\n`
-                + `• Katılım limiti: **${s.joinLimit}** / **${s.windowSecs}** sn\n`
-                + `• Min. hesap yaşı: **${s.minAccountAgeDays === 0 ? 'kapalı' : `${s.minAccountAgeDays} gün`}**\n`
-                + `• Raid modu aksiyonu: **${s.action === 'kick' ? 'at (kick)' : 'yalnız logla'}**`)],
+            embeds: [baseEmbed(s.enabled ? Colors.success : Colors.neutral)
+              .setTitle(s.enabled ? '🛡️ Raid Koruması Açık' : '🛡️ Raid Koruması Kapalı')
+              .setDescription(s.enabled
+                ? 'Toplu katılım algılandığında raid modu devreye girer.'
+                : 'Katılım hızı ve hesap yaşı kontrolleri şu anda uygulanmıyor.')
+              .addFields(
+                { name: 'Katılım limiti', value: `${s.joinLimit} / ${s.windowSecs} sn`, inline: true },
+                {
+                  name: 'Min. hesap yaşı',
+                  value: s.minAccountAgeDays === 0 ? 'Kapalı' : `${s.minAccountAgeDays} gün`,
+                  inline: true,
+                },
+                {
+                  name: 'Raid modunda',
+                  value: s.action === 'kick' ? 'Yeni katılımlar atılır' : 'Yalnız kaydedilir',
+                  inline: true,
+                },
+              )],
             ephemeral: true,
           });
         }
@@ -553,9 +669,24 @@ export default [
         addCase('raid_toggle', null, interaction.user.id, null, enable ? 'açıldı' : 'kapatıldı');
         const s = raidSettings();
         return interaction.reply({
-          embeds: [okEmbed(`🛡️ Raid koruması **${enable ? 'açıldı' : 'kapatıldı'}**.\n`
-            + `• Katılım: ${s.joinLimit}/${s.windowSecs}sn • Min. yaş: `
-            + `${s.minAccountAgeDays === 0 ? 'kapalı' : `${s.minAccountAgeDays}g`} • Aksiyon: ${s.action}`)],
+          embeds: [okEmbed(enable
+            ? 'Toplu katılım algılandığında raid modu devreye girecek.'
+            : 'Katılım hızı ve hesap yaşı kontrolleri devre dışı.',
+          enable ? '🛡️ Raid Koruması Açıldı' : '🛡️ Raid Koruması Kapatıldı')
+            .addFields(
+              { name: 'Katılım limiti', value: `${s.joinLimit} / ${s.windowSecs} sn`, inline: true },
+              {
+                name: 'Min. hesap yaşı',
+                value: s.minAccountAgeDays === 0 ? 'Kapalı' : `${s.minAccountAgeDays} gün`,
+                inline: true,
+              },
+              {
+                name: 'Raid modunda',
+                value: s.action === 'kick' ? 'Yeni katılımlar atılır' : 'Yalnız kaydedilir',
+                inline: true,
+              },
+            )],
+          ephemeral: true,
         });
       }
 
@@ -564,22 +695,35 @@ export default [
         if (mode === 'status') {
           const enabled = getSetting('guard_enabled', '1') === '1';
           return interaction.reply({
-            embeds: [baseEmbed(enabled ? Colors.success : Colors.danger)
-              .setTitle('🛡️ Patlama Koruması')
-              .setDescription(`Durum: **${enabled ? 'AÇIK' : 'KAPALI'}**\n\n`
-                + 'Kısa sürede toplu kanal/rol silme, toplu ban/kick, webhook oluşturma ve bot ekleme '
-                + 'girişimlerinde failin tüm rolleri alınır ve olay loglanır. Kurucu muaftır.')],
+            embeds: [baseEmbed(enabled ? Colors.success : Colors.neutral)
+              .setTitle(enabled ? '🛡️ Patlama Koruması Açık' : '🛡️ Patlama Koruması Kapalı')
+              .setDescription(enabled
+                ? 'Sunucuyu yıkıcı işlemlere karşı izliyorum.'
+                : 'Yıkıcı işlemler şu anda izlenmiyor. `/admin koruma aç` ile geri açabilirsin.')
+              .addFields({
+                name: 'Nasıl çalışır',
+                value: 'Kısa sürede toplu kanal/rol silme, toplu ban veya kick, webhook oluşturma ve '
+                  + 'izinsiz bot ekleme girişimlerinde failin tüm rolleri alınır ve olay log kanalına düşer. '
+                  + 'Kurucu bu kontrolden muaftır.',
+              })],
+            ephemeral: true,
           });
         }
         const enable = mode === 'on';
         setSetting('guard_enabled', enable ? '1' : '0');
         addCase('guard_toggle', null, interaction.user.id, enable ? 'açıldı' : 'kapatıldı');
         return interaction.reply({
-          embeds: [okEmbed(enable ? '🛡️ Patlama koruması **açıldı**.' : '⚠️ Patlama koruması **kapatıldı**.')],
+          embeds: [enable
+            ? okEmbed('Yıkıcı işlemler yeniden izleniyor.', '🛡️ Patlama Koruması Açıldı')
+            : baseEmbed(Colors.warn).setTitle('⚠️ Patlama Koruması Kapatıldı')
+              .setDescription('Sunucu artık toplu silme ve yetki suistimaline karşı korunmuyor.')],
+          ephemeral: true,
         });
       }
 
-      return interaction.reply({ embeds: [errEmbed('Bilinmeyen alt komut.')], ephemeral: true });
+      return interaction.reply({
+        embeds: [errEmbed('Bu alt komut tanınmıyor.', 'Bilinmeyen Komut')], ephemeral: true,
+      });
     },
   },
 
@@ -587,7 +731,7 @@ export default [
     tier: Tier.ADMIN,
     data: new SlashCommandBuilder()
       .setName('duyuru')
-      .setDescription('Bot üzerinden bir kanala mesaj gönderir')
+      .setDescription('Bot adına bir kanala duyuru gönderir')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addChannelOption((o) => o.setName('kanal').setDescription('Hedef kanal')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true))
@@ -610,7 +754,10 @@ export default [
         await channel.send({ content: message, allowedMentions: { parse: ['users', 'roles'] } });
       }
       addCase('announce', null, interaction.user.id, null, `#${channel.name}`);
-      return interaction.reply({ embeds: [okEmbed(`📣 Mesaj ${channel} kanalına gönderildi.`)], ephemeral: true });
+      return interaction.reply({
+        embeds: [okEmbed(`Duyurun ${channel} kanalında yayında.`, '📣 Duyuru Gönderildi')],
+        ephemeral: true,
+      });
     },
   },
 
@@ -618,7 +765,7 @@ export default [
     tier: Tier.ADMIN,
     data: new SlashCommandBuilder()
       .setName('embed')
-      .setDescription('Bot üzerinden detaylı bir embed mesajı gönderir')
+      .setDescription('Bot adına özel bir embed kartı gönderir')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addChannelOption((o) => o.setName('kanal').setDescription('Hedef kanal')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true))
@@ -642,10 +789,18 @@ export default [
       try {
         await channel.send({ embeds: [embed] });
       } catch (err) {
-        return interaction.reply({ embeds: [errEmbed(`Embed gönderilemedi: ${clean(err.message, 100)}`)], ephemeral: true });
+        console.error('[admin] embed gönderilemedi:', err.message);
+        return interaction.reply({
+          embeds: [errEmbed('Embed gönderilemedi. Görsel bağlantılarının geçerli olduğundan ve botun '
+            + `${channel} kanalına yazma izni olduğundan emin ol.`, 'Embed Gönderilemedi')],
+          ephemeral: true,
+        });
       }
       addCase('embed', null, interaction.user.id, null, `#${channel.name}`);
-      return interaction.reply({ embeds: [okEmbed(`📨 Embed ${channel} kanalına gönderildi.`)], ephemeral: true });
+      return interaction.reply({
+        embeds: [okEmbed(`Embed ${channel} kanalında yayında.`, '📨 Embed Gönderildi')],
+        ephemeral: true,
+      });
     },
   },
 ];

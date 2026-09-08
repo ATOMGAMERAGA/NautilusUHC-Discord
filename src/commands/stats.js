@@ -2,11 +2,13 @@ import {
   SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
-import { errEmbed, baseEmbed, Colors, Assets } from '../embeds.js';
+import {
+  baseEmbed, emptyEmbed, bridgeErrorEmbed, brandFooter, Colors, Assets,
+} from '../embeds.js';
 import { mcapi } from '../mcapi.js';
-import { casesOf, casesOfPage, caseCount } from '../db.js';
+import { casesOfPage, caseCount } from '../db.js';
 import { rankFor, rankLabel } from '../ranks.js';
-import { clean, discordTime, formatDuration } from '../util.js';
+import { clean, codeText, discordTime } from '../util.js';
 
 /** Skin renders by username (works for offline-mode names too; unknown → Steve). */
 const skinHead = (name) => `https://minotar.net/helm/${encodeURIComponent(name)}/128.png`;
@@ -15,15 +17,19 @@ const skinBody = (name) => `https://mc-heads.net/body/${encodeURIComponent(name)
 const MEDALS = ['🥇', '🥈', '🥉'];
 
 const ACTION_LABELS = {
-  ban: '🔨 Ban', unban: '🔓 Unban', kick: '👢 Kick', mute: '🔇 Mute', unmute: '🔊 Unmute',
-  warn: '⚠️ Uyarı', warn_delete: '🧹 Uyarı silme', warn_clear: '🧹 Uyarı temizleme',
-  purge: '🧹 Mesaj silme', mc_ban: '⛏️ MC Ban', mc_unban: '⛏️ MC Unban', mc_mute: '⛏️ MC Mute',
-  mc_unmute: '⛏️ MC Unmute', mc_kick: '⛏️ MC Kick', mc_warn: '⛏️ MC Uyarı',
-  link_create: '🔗 Hesap bağlama', link_delete: '🗑️ Bağlantı silme',
-  softban: '🧽 Softban', nick: '✏️ Takma ad', note_add: '📝 Not', note_delete: '🗑️ Not silme',
-  lockdown: '🔒 Lockdown', lockdown_end: '🔓 Lockdown bitişi',
-  warn_auto_timeout: '⏱️ Otomatik timeout (uyarı eşiği)', warn_auto_ban: '🔨 Otomatik ban (uyarı eşiği)',
-  elorank_sync: '🎨 Tier rol senkronu',
+  ban: 'Ban', unban: 'Ban kaldırma', kick: 'Kick', mute: 'Susturma', unmute: 'Susturma kaldırma',
+  warn: 'Uyarı', warn_delete: 'Uyarı silme', warn_clear: 'Uyarı temizleme',
+  purge: 'Mesaj silme', mc_ban: 'MC ban', mc_unban: 'MC ban kaldırma', mc_mute: 'MC susturma',
+  mc_unmute: 'MC susturma kaldırma', mc_kick: 'MC kick', mc_warn: 'MC uyarı',
+  link_create: 'Hesap bağlama', link_delete: 'Bağlantı silme',
+  softban: 'Softban', nick: 'Takma ad', note_add: 'Not', note_delete: 'Not silme',
+  lockdown: 'Lockdown', lockdown_end: 'Lockdown bitişi',
+  warn_auto_timeout: 'Otomatik susturma (uyarı eşiği)', warn_auto_ban: 'Otomatik ban (uyarı eşiği)',
+  elorank_sync: 'Tier rol senkronu',
+  ticket_open: 'Talep açıldı', ticket_close: 'Talep kapatıldı', ticket_reopen: 'Talep yeniden açıldı',
+  ticket_claim: 'Talep üstlenildi', ticket_unclaim: 'Talep bırakıldı', ticket_assign: 'Talep atandı',
+  ticket_priority: 'Talep önceliği', ticket_status: 'Talep durumu', ticket_note: 'Talep notu',
+  ticket_rate: 'Talep değerlendirmesi',
 };
 
 function kd(kills, deaths) {
@@ -31,7 +37,7 @@ function kd(kills, deaths) {
 }
 
 function winrate(wins, games) {
-  return games === 0 ? '0%' : `${Math.round((wins / games) * 100)}%`;
+  return games === 0 ? '%0' : `%${Math.round((wins / games) * 100)}`;
 }
 
 async function profil(interaction) {
@@ -44,60 +50,68 @@ async function profil(interaction) {
   else query = `discord=${interaction.user.id}`;
 
   const res = await mcapi.statsPlayer(query);
-  if (!res.ok) return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+  if (!res.ok) return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'oyuncu profili' })] });
+
   if (!res.found) {
-    const hint = mcName
-      ? `**${clean(mcName, 30)}** adında kayıtlı bir oyuncu bulunamadı (en az bir maç oynamış olmalı).`
-      : user
-        ? `${user} bağlı bir Minecraft hesabına sahip değil.`
-        : 'Hesabın bir Minecraft hesabına bağlı değil. Oyun içinde `/link` yaz, koda panel üzerinden gir.';
-    return interaction.editReply({ embeds: [errEmbed(hint)] });
+    if (mcName) {
+      return interaction.editReply({
+        embeds: [emptyEmbed('Oyuncu Bulunamadı',
+          `**${clean(mcName, 30)}** adına kayıtlı bir istatistik yok.`,
+          'Oyuncunun en az bir maç oynamış olması gerekir.')],
+      });
+    }
+    if (user) {
+      return interaction.editReply({
+        embeds: [emptyEmbed('Hesap Bağlı Değil',
+          `${user} henüz bir Minecraft hesabı bağlamamış.`)],
+      });
+    }
+    return interaction.editReply({
+      embeds: [emptyEmbed('Hesabın Bağlı Değil',
+        'Profil oluşturmak için önce Minecraft hesabını bağlaman gerekiyor.',
+        'Minecraft sunucusunda `/link` yaz, sonra Discord\'daki `/link` komutundaki adımları izle.')],
+    });
   }
 
   const rank = rankFor(res.elo);
-  const losses = res.games - res.wins;
-  const embed = baseEmbed(rank.color ?? Colors.main)
-    .setTitle(`${rank.emoji ?? '🏅'} ${clean(res.name, 30)} — Oyuncu Profili`)
+  const losses = Math.max(0, res.games - res.wins);
+  const embed = baseEmbed(rank.color ?? Colors.brand)
+    .setTitle(`${rank.emoji ?? '🏅'} ${clean(res.name, 30)}`)
+    .setDescription(`**${res.elo} ELO** • ${rankLabel(res.elo)} • Sıralama **#${res.rank}** / ${res.totalPlayers}`)
     .setThumbnail(skinHead(res.name))
     .setImage(skinBody(res.name))
     .addFields(
       {
-        name: '🏆 ELO',
-        value: `**${res.elo}** — ${rankLabel(res.elo)}\nZirve: ${res.peakElo}\nSıralama: **#${res.rank}** / ${res.totalPlayers}`,
+        name: 'Maçlar',
+        value: `Oynanan **${res.games}**\nKazanılan **${res.wins}** (${winrate(res.wins, res.games)})\nKaybedilen ${losses}`,
         inline: true,
       },
       {
-        name: '⚔️ Maçlar',
-        value: `Oynanan: **${res.games}**\nKazanılan: **${res.wins}** (${winrate(res.wins, res.games)})\nKaybedilen: ${Math.max(0, losses)}`,
+        name: 'Dövüş',
+        value: `Kill **${res.kills}**\nÖlüm ${res.deaths}\nK/D **${kd(res.kills, res.deaths)}**`,
         inline: true,
       },
       {
-        name: '🗡️ Dövüş',
-        value: `Kill: **${res.kills}**\nÖlüm: ${res.deaths}\nK/D: **${kd(res.kills, res.deaths)}**`,
-        inline: true,
-      },
-      {
-        name: '🔥 Seri',
-        value: `Aktif galibiyet serisi: **${res.winStreak}**\nEn iyi seri: ${res.bestStreak}`,
-        inline: true,
-      },
-      {
-        name: '🔗 Discord',
-        value: res.discordId ? `<@${res.discordId}>` : 'Bağlı değil',
+        name: 'Seri',
+        value: `Güncel **${res.winStreak}**\nEn iyi ${res.bestStreak}\nZirve ELO ${res.peakElo}`,
         inline: true,
       },
     );
 
+  if (res.discordId) {
+    embed.addFields({ name: 'Discord', value: `<@${res.discordId}>`, inline: false });
+  }
+
   const flags = [];
   if (res.ban) {
-    flags.push(`🔨 **Banlı** — ${clean(res.ban.reason || 'sebep yok', 80)}`
-      + (res.ban.expiresAt > 0 ? ` (bitiş: ${discordTime(res.ban.expiresAt, 'f')})` : ' (kalıcı)'));
+    flags.push(`🔨 **Yasaklı** — ${clean(res.ban.reason || 'sebep belirtilmemiş', 80)}`
+      + (res.ban.expiresAt > 0 ? ` (bitiş ${discordTime(res.ban.expiresAt, 'f')})` : ' (kalıcı)'));
   }
   if (res.mute) {
-    flags.push(`🔇 **Susturulmuş** — ${clean(res.mute.reason || 'sebep yok', 80)}`
-      + (res.mute.expiresAt > 0 ? ` (bitiş: ${discordTime(res.mute.expiresAt, 'f')})` : ' (kalıcı)'));
+    flags.push(`🔇 **Susturulmuş** — ${clean(res.mute.reason || 'sebep belirtilmemiş', 80)}`
+      + (res.mute.expiresAt > 0 ? ` (bitiş ${discordTime(res.mute.expiresAt, 'f')})` : ' (kalıcı)'));
   }
-  if (flags.length) embed.addFields({ name: '🚫 Aktif Cezalar', value: flags.join('\n'), inline: false });
+  if (flags.length) embed.addFields({ name: 'Aktif Cezalar', value: flags.join('\n'), inline: false });
 
   return interaction.editReply({ embeds: [embed] });
 }
@@ -105,25 +119,32 @@ async function profil(interaction) {
 async function siralama(interaction) {
   const by = interaction.options.getString('tür') ?? 'elo';
   const res = await mcapi.statsTop(by, 10);
-  if (!res.ok) return interaction.editReply({ embeds: [errEmbed(`❌ ${res.error}`)] });
+  if (!res.ok) return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'liderlik tablosu' })] });
+
   const players = res.players ?? [];
   if (!players.length) {
-    return interaction.editReply({ embeds: [baseEmbed(Colors.dark).setDescription('Henüz kayıtlı istatistik yok.')] });
+    return interaction.editReply({
+      embeds: [emptyEmbed('Tablo Henüz Boş', 'Sıralama için yeterli maç oynanmamış.',
+        'İlk maçlar tamamlandığında tablo dolmaya başlar.')],
+    });
   }
-  const titles = { elo: '🏆 ELO Sıralaması', wins: '🥇 Galibiyet Sıralaması', kills: '🗡️ Kill Sıralaması' };
+  const titles = {
+    elo: '🏆 ELO Sıralaması',
+    wins: '🥇 Galibiyet Sıralaması',
+    kills: '🗡️ Kill Sıralaması',
+  };
   const lines = players.map((p, i) => {
-    const medal = MEDALS[i] ?? `**${i + 1}.**`;
+    const place = MEDALS[i] ?? `\`${String(i + 1).padStart(2, ' ')}.\``;
     const value = by === 'wins' ? `${p.wins} galibiyet`
       : by === 'kills' ? `${p.kills} kill`
         : `${p.elo} ELO — ${rankLabel(p.elo)}`;
-    return `${medal} \`${clean(p.name, 20)}\` — ${value}`;
+    return `${place} **${clean(p.name, 20)}** — ${value}`;
   });
-  const thumb = by === 'kills' ? Assets.item.diamondSword : Assets.item.goldenApple;
-  const embed = baseEmbed(Colors.main)
+  const embed = baseEmbed(Colors.brand)
     .setTitle(titles[by] ?? titles.elo)
-    .setThumbnail(thumb)
+    .setThumbnail(by === 'kills' ? Assets.item.diamondSword : Assets.item.goldenApple)
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `Toplam ${res.totalPlayers} kayıtlı oyuncu • Nautilus PvP` });
+    .setFooter(brandFooter(`İlk 10 / ${res.totalPlayers} oyuncu`));
   return interaction.editReply({ embeds: [embed] });
 }
 
@@ -132,7 +153,7 @@ export default [
     tier: Tier.MEMBER,
     data: new SlashCommandBuilder()
       .setName('profil')
-      .setDescription('Bir oyuncunun Nautilus PvP profilini gösterir (skin, ELO, rank, maçlar)')
+      .setDescription('Bir oyuncunun ELO, rank ve maç istatistiklerini gösterir')
       .addStringOption((o) => o.setName('oyuncu').setDescription('Minecraft oyuncu adı'))
       .addUserOption((o) => o.setName('kullanıcı').setDescription('Discord kullanıcısı (bağlı hesabı gösterilir)')),
     async execute(interaction) {
@@ -145,8 +166,8 @@ export default [
     tier: Tier.MEMBER,
     data: new SlashCommandBuilder()
       .setName('sıralama')
-      .setDescription('Nautilus PvP liderlik tablosu')
-      .addStringOption((o) => o.setName('tür').setDescription('Sıralama türü')
+      .setDescription('Liderlik tablosunu gösterir (ELO, galibiyet veya kill)')
+      .addStringOption((o) => o.setName('tür').setDescription('Sıralama ölçütü')
         .addChoices(
           { name: 'ELO', value: 'elo' },
           { name: 'Galibiyet', value: 'wins' },
@@ -162,7 +183,7 @@ export default [
     tier: Tier.REHBER,
     data: new SlashCommandBuilder()
       .setName('sicil')
-      .setDescription('Bir kullanıcının bot moderasyon geçmişini gösterir (sayfalı)')
+      .setDescription('Bir kullanıcının moderasyon geçmişini gösterir')
       .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
       .addUserOption((o) => o.setName('kullanıcı').setDescription('Kullanıcı').setRequired(true)),
     async execute(interaction) {
@@ -184,8 +205,7 @@ export function sicilPayload(userId, userTag, page) {
   const total = caseCount(userId);
   if (!total) {
     return {
-      embeds: [baseEmbed(Colors.success)
-        .setDescription(`<@${userId}> için kayıtlı bir işlem yok — sicili temiz. ✅`)],
+      embeds: [emptyEmbed('Sicil Temiz', `<@${userId}> için kayıtlı bir moderasyon işlemi yok.`)],
       components: [],
     };
   }
@@ -199,13 +219,13 @@ export function sicilPayload(userId, userTag, page) {
       + (extra ? `\n└ ${extra}` : '');
   });
   const embed = baseEmbed(Colors.warn)
-    .setTitle(`📋 Sicil — ${clean(userTag ?? userId, 40)}`)
-    .setDescription(lines.join('\n').slice(0, 3900))
-    .setFooter({ text: `Sayfa ${safePage + 1}/${pages} — toplam ${total} kayıt • Nautilus PvP` });
+    .setTitle(`📋 Sicil — ${codeText(userTag ?? userId, 40)}`)
+    .setDescription(lines.join('\n'))
+    .setFooter(brandFooter(`Sayfa ${safePage + 1}/${pages}`, `${total} kayıt`));
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage - 1}`).setLabel('◀ Önceki')
+    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage - 1}`).setLabel('Önceki')
       .setStyle(ButtonStyle.Secondary).setDisabled(safePage === 0),
-    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage + 1}`).setLabel('Sonraki ▶')
+    new ButtonBuilder().setCustomId(`sicil:${userId}:${safePage + 1}`).setLabel('Sonraki')
       .setStyle(ButtonStyle.Secondary).setDisabled(safePage >= pages - 1),
   );
   return { embeds: [embed], components: pages > 1 ? [row] : [] };
