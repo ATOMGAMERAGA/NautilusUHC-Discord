@@ -1,6 +1,6 @@
 import {
   SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  ChannelType,
+  ChannelType, MessageFlags,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
 import {
@@ -45,7 +45,7 @@ async function handleEloRank(interaction, sub) {
         .setTitle('🏆 ELO Rank Kademeleri')
         .setDescription(lines.join('\n'))
         .setFooter(brandFooter(`${list.length} kademe`))],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   if (sub === 'rolkur') {
@@ -78,7 +78,7 @@ async function handleEloRank(interaction, sub) {
       return interaction.reply({
         embeds: [errEmbed(`${role} eşlenemiyor: yönetilen bir rol ya da botun rolünün üstünde.`,
           'Rol Eşlenemedi')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     setTierRole(tierName, role.id);
@@ -86,7 +86,7 @@ async function handleEloRank(interaction, sub) {
     return interaction.reply({
       embeds: [okEmbed(`**${clean(tierName, 20)}** kademesindeki oyuncular artık ${role} rolünü alacak.`,
         '🎨 Tier Rolü Eşlendi')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   if (sub === 'senkron') {
@@ -94,7 +94,7 @@ async function handleEloRank(interaction, sub) {
       return interaction.reply({
         embeds: [errEmbed('Tier rolleri henüz kurulmamış.\nÖnce `/admin elorank rolkur` komutunu çalıştır.',
           'Rol Eşlemesi Yok')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     await interaction.deferReply();
@@ -138,7 +138,7 @@ async function handleEloRank(interaction, sub) {
     return interaction.reply({
       embeds: [okEmbed(`**${clean(name, 30)}** kademesi **${min} ELO** ve üzeri için geçerli. `
         + `Toplam ${list.length} kademe var.`, '🏅 Kademe Kaydedildi')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   if (sub === 'sil') {
@@ -147,13 +147,13 @@ async function handleEloRank(interaction, sub) {
       return interaction.reply({
         embeds: [errEmbed(`**${clean(name, 30)}** adında bir kademe bulunamadı. `
           + 'Son kalan kademe silinemez.', 'Kademe Silinemedi')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     addCase('elorank_del', null, interaction.user.id, name);
     return interaction.reply({
       embeds: [okEmbed(`**${clean(name, 30)}** kademesi listeden kaldırıldı.`, '🗑️ Kademe Silindi')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   // sıfırla
@@ -161,7 +161,7 @@ async function handleEloRank(interaction, sub) {
   addCase('elorank_reset', null, interaction.user.id, null);
   return interaction.reply({
     embeds: [okEmbed('Rank kademeleri fabrika ayarlarına döndü.', '🔄 Kademeler Sıfırlandı')],
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -183,7 +183,7 @@ async function handleRolePanel(interaction) {
       return interaction.reply({
         embeds: [errEmbed(`${role} panele eklenemez: yetki taşıyan, yönetilen ya da botun rolünün `
           + 'üstünde bir rol.', 'Rol Panele Uygun Değil')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -203,7 +203,7 @@ async function handleRolePanel(interaction) {
   addCase('role_panel', null, interaction.user.id, null, `#${channel.name} (${roles.length} rol)`);
   return interaction.reply({
     embeds: [okEmbed(`${roles.length} rollük panel ${channel} kanalına gönderildi.`, '🎭 Rol Paneli Gönderildi')],
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -353,7 +353,7 @@ export default [
             ? okEmbed('Spam, davet linki ve toplu etiket filtresi tekrar çalışıyor.', '🤖 Automod Açıldı')
             : baseEmbed(Colors.warn).setTitle('⚠️ Automod Kapatıldı')
               .setDescription('Sohbet filtreleri devre dışı. `/admin automod aç` ile geri açabilirsin.')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -366,7 +366,7 @@ export default [
             ? `Yeni üyeler ${channel} kanalında karşılanacak.`
             : 'Yeni üyeler artık karşılama mesajı almayacak.',
           channel ? '👋 Karşılama Açıldı' : '👋 Karşılama Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -380,7 +380,7 @@ export default [
               + 'Üyeler bu rolü `/admin rolpanel` ile kurduğun panelden alabilir.'
             : 'Maç duyurularında artık rol etiketlenmeyecek.',
           role ? '📣 Duyuru Rolü Ayarlandı' : '📣 Duyuru Rolü Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -393,7 +393,7 @@ export default [
             ? `Sunucuya katılan her üyeye ${role} rolü otomatik verilecek.`
             : 'Yeni üyelere artık otomatik rol verilmeyecek.',
           role ? '🎟️ Otorol Açıldı' : '🎟️ Otorol Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -406,7 +406,7 @@ export default [
             ? `Oyun içi raporlar ve MC ceza aynaları ${channel} kanalına düşecek.`
             : 'Rapor ve ceza aynaları artık hiçbir kanala düşmeyecek.',
           channel ? '🛡️ Staff Kanalı Ayarlandı' : '🛡️ Staff Kanalı Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -419,7 +419,7 @@ export default [
             ? `Küme atlama ve düşme duyuruları ${channel} kanalında yayınlanacak.`
             : 'Küme duyuruları yeniden maç kanalına düşecek.',
           '📈 Rank Kanalı Güncellendi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -433,7 +433,7 @@ export default [
             ? `Canlı durum panosu ${channel} kanalına kurulacak ve yaklaşık dakikada bir kendini güncelleyecek.`
             : 'Durum panosu kapatıldı; mevcut pano mesajı artık güncellenmeyecek.',
           channel ? '📊 Durum Panosu Açıldı' : '📊 Durum Panosu Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -445,14 +445,14 @@ export default [
           return interaction.reply({
             embeds: [okEmbed(`**${TICKET_TYPES[tur]?.label ?? tur}** talepleri artık `
               + `**${codeText(category.name, 60)}** kategorisinde açılacak.`, '🎫 Kategori Ayarlandı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         setSetting('ticket_category', category.id);
         return interaction.reply({
           embeds: [okEmbed(`Tür bazlı ayarı olmayan tüm talepler **${codeText(category.name, 60)}** `
             + 'kategorisinde açılacak.', '🎫 Kategori Ayarlandı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -466,7 +466,7 @@ export default [
               .setDescription(on
                 ? 'Üyeler panel ve `/destek aç` üzerinden talep oluşturabiliyor.'
                 : 'Panel ve komut üzerinden yeni talep açılamıyor. Açık talepler çalışmaya devam eder.')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const enable = durum === 'on';
@@ -477,7 +477,7 @@ export default [
             ? 'Üyeler yeniden destek talebi açabilir.'
             : 'Yeni talep açılamayacak; açık talepler kapanana kadar çalışmaya devam eder.',
           enable ? '🎫 Destek Sistemi Açıldı' : '🎫 Destek Sistemi Kapatıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -500,7 +500,7 @@ export default [
         addCase('ticket_panel', null, interaction.user.id, null, `#${channel.name}`);
         return interaction.reply({
           embeds: [okEmbed(`Destek paneli ${channel} kanalına gönderildi.`, '🎫 Panel Gönderildi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -514,7 +514,7 @@ export default [
           return interaction.reply({
             embeds: [errEmbed(`<#${config.linkChannelId}> kanalına ulaşamıyorum. `
               + 'Kanal silinmiş olabilir ya da botun görme izni yok.', 'Kanala Ulaşılamadı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const embed = baseEmbed(Colors.brand)
@@ -543,7 +543,7 @@ export default [
         addCase('link_panel', null, interaction.user.id, null, `#${channel.name}`);
         return interaction.reply({
           embeds: [okEmbed(`Hesap bağlama paneli ${channel} kanalına gönderildi.`, '🔗 Panel Gönderildi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -553,7 +553,7 @@ export default [
         addCase('log_channel', null, interaction.user.id, null, channel.id);
         return interaction.reply({
           embeds: [okEmbed(`Moderasyon ve güvenlik kayıtları ${channel} kanalına düşecek.`, '📋 Log Kanalı Ayarlandı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -564,7 +564,7 @@ export default [
         return interaction.reply({
           embeds: [okEmbed(`Maç planlama, başlangıç ve sonuç duyuruları ${channel} kanalında yayınlanacak.`,
             '⚔️ Maç Kanalı Ayarlandı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -583,7 +583,7 @@ export default [
                 { name: 'Susturma eşiği', value: t, inline: true },
                 { name: 'Ban eşiği', value: b, inline: true },
               )],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         if (tur === 'kapat') {
@@ -592,14 +592,14 @@ export default [
           return interaction.reply({
             embeds: [okEmbed('Uyarı sayısına bağlı otomatik susturma ve ban devre dışı.',
               '⚙️ Otomatik Yaptırım Kapatıldı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const adet = interaction.options.getInteger('adet');
         if (!adet) {
           return interaction.reply({
             embeds: [errEmbed('Eşiği kurmak için `adet` seçeneğini de doldurman gerekiyor.', 'Eksik Bilgi')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         if (tur === 'timeout') {
@@ -608,7 +608,7 @@ export default [
           if (!durationMs) {
             return interaction.reply({
               embeds: [errEmbed('Süreyi anlayamadım. Örnek: `1sa`, `1g`.', 'Geçersiz Süre')],
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
             });
           }
           setTimeoutThreshold(adet, durationMs);
@@ -616,7 +616,7 @@ export default [
           return interaction.reply({
             embeds: [okEmbed(`**${adet}** uyarıya ulaşan kullanıcı otomatik olarak `
               + `**${formatDuration(durationMs)}** susturulacak.`, '⏱️ Susturma Eşiği Ayarlandı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         // ban
@@ -625,7 +625,7 @@ export default [
         return interaction.reply({
           embeds: [okEmbed(`**${adet}** uyarıya ulaşan kullanıcı otomatik olarak yasaklanacak.`,
             '🔨 Ban Eşiği Ayarlandı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -652,7 +652,7 @@ export default [
                   inline: true,
                 },
               )],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         // Opsiyonel parametreler her durumda yazılır (verilmişse).
@@ -686,7 +686,7 @@ export default [
                 inline: true,
               },
             )],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -706,7 +706,7 @@ export default [
                   + 'izinsiz bot ekleme girişimlerinde failin tüm rolleri alınır ve olay log kanalına düşer. '
                   + 'Kurucu bu kontrolden muaftır.',
               })],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const enable = mode === 'on';
@@ -717,12 +717,12 @@ export default [
             ? okEmbed('Yıkıcı işlemler yeniden izleniyor.', '🛡️ Patlama Koruması Açıldı')
             : baseEmbed(Colors.warn).setTitle('⚠️ Patlama Koruması Kapatıldı')
               .setDescription('Sunucu artık toplu silme ve yetki suistimaline karşı korunmuyor.')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
       return interaction.reply({
-        embeds: [errEmbed('Bu alt komut tanınmıyor.', 'Bilinmeyen Komut')], ephemeral: true,
+        embeds: [errEmbed('Bu alt komut tanınmıyor.', 'Bilinmeyen Komut')], flags: MessageFlags.Ephemeral,
       });
     },
   },
@@ -756,7 +756,7 @@ export default [
       addCase('announce', null, interaction.user.id, null, `#${channel.name}`);
       return interaction.reply({
         embeds: [okEmbed(`Duyurun ${channel} kanalında yayında.`, '📣 Duyuru Gönderildi')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     },
   },
@@ -793,13 +793,13 @@ export default [
         return interaction.reply({
           embeds: [errEmbed('Embed gönderilemedi. Görsel bağlantılarının geçerli olduğundan ve botun '
             + `${channel} kanalına yazma izni olduğundan emin ol.`, 'Embed Gönderilemedi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       addCase('embed', null, interaction.user.id, null, `#${channel.name}`);
       return interaction.reply({
         embeds: [okEmbed(`Embed ${channel} kanalında yayında.`, '📨 Embed Gönderildi')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     },
   },

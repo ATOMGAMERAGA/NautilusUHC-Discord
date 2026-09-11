@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { Tier } from '../permissions.js';
 import {
   okEmbed, errEmbed, baseEmbed, bridgeErrorEmbed, Colors, Assets, Brand,
@@ -16,7 +16,7 @@ export default [
       .setName('link')
       .setDescription('Minecraft hesap bağlantı durumunu gösterir'),
     async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const res = await mcapi.linkStatus(`discord=${interaction.user.id}`);
       if (!res.ok) {
         return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'bağlantı durumu' })] });
@@ -58,7 +58,7 @@ export default [
     async execute(interaction) {
       // Bağlantı kaydı kişisel veridir: sonuç yalnız yetkiliye gösterilir,
       // kalıcı iz log kanalına düşer.
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const sub = interaction.options.getSubcommand();
       const type = sub === 'mc' ? 'mc' : 'dc';
       const value = type === 'mc'

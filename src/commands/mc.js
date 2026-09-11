@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { Tier } from '../permissions.js';
 import {
   okEmbed, errEmbed, baseEmbed, emptyEmbed, bridgeErrorEmbed, Colors, Brand,
@@ -39,7 +39,7 @@ async function runModAction(interaction, action, { needDuration = false, allowDu
     if (!durationMs) {
       return interaction.reply({
         embeds: [errEmbed('Süreyi anlayamadım. Örnek: `10dk`, `2sa`, `7g`.', 'Geçersiz Süre')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }

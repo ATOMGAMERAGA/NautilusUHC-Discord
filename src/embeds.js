@@ -274,6 +274,35 @@ export const warningEmbed = warnEmbed;
  */
 export function classifyBridgeError(res = {}) {
   const status = Number(res?.status);
+  const errorCode = String(res?.errorCode ?? '');
+
+  // Taşıma katmanının kendi kodları status'tan ÖNCE gelir: bunların HTTP
+  // karşılığı yoktur ve "kayıt bulunamadı" gibi yanlış bir anlama düşmemeleri
+  // gerekir (bkz. linkflow.js — sahte "kod geçersiz" arızasının kökeni).
+  if (errorCode === 'plugin_not_connected') {
+    return {
+      kind: 'not_connected',
+      title: 'Minecraft Plugin Bağlantısı Yok',
+      description: 'Minecraft eklentisi şu anda bota bağlı değil.\n'
+        + 'Sunucu açıldığında tekrar dene; sorun sürerse bir yetkiliye bildir.',
+    };
+  }
+  if (errorCode === 'bridge_misconfigured') {
+    return {
+      kind: 'misconfigured',
+      title: 'Köprü Ayarı Hatalı',
+      description: 'İstek Minecraft eklentisine yönlendirilemiyor.\n'
+        + 'Lütfen bir yetkiliye bildir.',
+    };
+  }
+  if (errorCode === 'multiple_plugin_instances') {
+    return {
+      kind: 'ambiguous_plugin_instance',
+      title: 'Birden Fazla Sunucu Bağlı',
+      description: 'Köprüye birden fazla Minecraft sunucusu bağlı; isteğin hangisine gideceği '
+        + 'belirsiz olduğu için gönderilmedi.\nLütfen bir yetkiliye bildir.',
+    };
+  }
 
   if (status === 401 || status === 403) {
     return {
@@ -334,7 +363,11 @@ export function classifyBridgeError(res = {}) {
 export function bridgeErrorEmbed(res, { context } = {}) {
   const info = classifyBridgeError(res);
   if (res?.error) {
-    console.warn(`[köprü] ${context ?? 'istek'} başarısız (${info.kind}): ${res.error}`);
+    // Korelasyon kimliği ve backend hata kodu logda kalır; kullanıcı yalnız
+    // sınıflandırılmış metni görür.
+    const trace = [res.correlationId && `cid=${res.correlationId}`, res.errorCode && `code=${res.errorCode}`]
+      .filter(Boolean).join(' ');
+    console.warn(`[köprü] ${context ?? 'istek'} başarısız (${info.kind})${trace ? ` ${trace}` : ''}: ${res.error}`);
   }
   return errEmbed(info.description, info.title);
 }

@@ -1,10 +1,12 @@
 import {
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, PermissionFlagsBits,
+  MessageFlags,
 } from 'discord.js';
 import {
-  okEmbed, errEmbed, warnEmbed, neutralEmbed, bridgeErrorEmbed, Colors,
+  okEmbed, errEmbed, warnEmbed, neutralEmbed, Colors,
 } from './embeds.js';
 import { mcapi } from './mcapi.js';
+import { verifyLinkCode } from './linkflow.js';
 import { addCase, giveaways, polls, dmSubscriptions } from './db.js';
 import { confirmDecision } from './matchdm.js';
 import { clean, codeText } from './util.js';
@@ -41,49 +43,48 @@ export const componentHandlers = {
   },
 
   'link:modal': async (interaction) => {
-    const code = interaction.fields.getTextInputValue('code').trim().toUpperCase();
-    await interaction.deferReply({ ephemeral: true });
+    const code = interaction.fields.getTextInputValue('code');
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const status = await mcapi.linkStatus(`discord=${interaction.user.id}`);
-    if (status.ok && status.linked) {
+    // Karar linkflow.js'te verilir (Discord'dan bağımsız, test edilebilir):
+    // "kod geçersiz/süresi dolmuş" YALNIZCA plugin invalid_code/expired_code
+    // dediğinde gösterilir; köprü/yapılandırma hataları kendi adıyla anılır.
+    const decision = await verifyLinkCode({
+      code, discordId: interaction.user.id, discordTag: interaction.user.tag,
+    });
+
+    if (decision.outcome === 'already_linked_self') {
       return interaction.editReply({
         embeds: [warnEmbed(
-          `Discord hesabın zaten **${clean(status.mc, 30)}** ile eşleşmiş durumda.\n`
+          `Discord hesabın zaten **${clean(decision.mc, 30)}** ile eşleşmiş durumda.\n`
           + 'Bağlantıyı değiştirmen gerekiyorsa `/destek aç` ile talep oluştur.',
           'Hesabın Zaten Bağlı',
         )],
       });
     }
-
-    const res = await mcapi.linkVerify(code, interaction.user.id, interaction.user.tag);
-    if (!res.ok) {
-      // Kodun geçersiz olması normal bir kullanıcı hatasıdır: ne olduğunu ve
-      // nasıl düzelteceğini söyleriz. Diğer her şey sınıflandırılmış köprü
-      // hatasına düşer — ham backend metni kullanıcıya gösterilmez.
-      const badCode = res.status === 404 || res.status === 400
-        || /invalid|expired|geçersiz|süresi/i.test(res.error ?? '');
+    if (decision.outcome === 'failed') {
+      const { kind, title, description } = decision.failure;
       return interaction.editReply({
-        embeds: [badCode
-          ? errEmbed('Girdiğin kod geçersiz veya süresi dolmuş.\n'
-            + 'Minecraft sunucusunda `/link` yazarak yeni bir kod al ve tekrar dene.',
-          'Kod Doğrulanamadı')
-          : bridgeErrorEmbed(res, { context: 'hesap bağlama' })],
+        embeds: [kind === 'already_linked_other'
+          ? warnEmbed(description, title)
+          : errEmbed(description, title)],
       });
     }
 
-    addCase('link_create', interaction.user.id, interaction.user.id, null, res.mc);
+    const { mc } = decision;
+    addCase('link_create', interaction.user.id, interaction.user.id, null, mc);
     await sendLog(interaction.client, {
       title: 'Hesap Bağlandı',
       color: Colors.success,
       fields: [
         { name: 'Kullanıcı', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: true },
-        { name: 'Minecraft', value: `\`${codeText(res.mc, 30)}\``, inline: true },
+        { name: 'Minecraft', value: `\`${codeText(mc, 30)}\``, inline: true },
       ],
     });
     // ELO tier rolünü hemen ver (best-effort; rol eşlemesi kuruluysa).
     if (interaction.guild && Object.keys(roleMap()).length) {
       try {
-        const profile = await mcapi.statsPlayer(`name=${encodeURIComponent(res.mc)}`);
+        const profile = await mcapi.statsPlayer(`name=${encodeURIComponent(mc)}`);
         if (profile.ok && profile.found && profile.tier) {
           await syncMemberTierRole(interaction.guild, interaction.user.id, profile.tier);
         }
@@ -91,7 +92,7 @@ export const componentHandlers = {
     }
     return interaction.editReply({
       embeds: [okEmbed(
-        `Minecraft hesabın **${clean(res.mc, 30)}** ile eşleştirildi.\n`
+        `Minecraft hesabın **${clean(mc, 30)}** ile eşleştirildi.\n`
         + 'Artık Nautilus maçlarına katılabilir, profilini `/profil` ile görebilirsin.',
         '🔗 Hesap Bağlandı',
       )],
@@ -125,7 +126,7 @@ export const componentHandlers = {
   'bildirim:vazgec': async (interaction) => {
     const d = confirmDecision(interaction.customId, interaction.user.id);
     if (d === 'not_owner') {
-      return interaction.reply({ embeds: [notYours()], ephemeral: true });
+      return interaction.reply({ embeds: [notYours()], flags: MessageFlags.Ephemeral });
     }
     return interaction.update({
       embeds: [neutralEmbed('Bildirim ayarın olduğu gibi kaldı.', 'Değişiklik Yapılmadı')],
@@ -145,7 +146,7 @@ export const componentHandlers = {
     if (!gw || gw.ended) {
       return interaction.reply({
         embeds: [neutralEmbed('Bu çekiliş sona erdi. Sonuçlar çekiliş mesajında görünüyor.', 'Çekiliş Kapandı')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     const joined = giveaways.enter(id, interaction.user.id);
@@ -154,7 +155,7 @@ export const componentHandlers = {
       embeds: [joined
         ? okEmbed(`Çekilişe katıldın. Şu anki katılımcı sayısı: **${count}**.`, '🎉 Katılım Alındı')
         : neutralEmbed(`Bu çekilişe zaten katıldın. Katılımcı sayısı: **${count}**.`, 'Zaten Katıldın')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 
@@ -168,7 +169,7 @@ export const componentHandlers = {
     if (!poll || poll.ended || !poll.options[choice]) {
       return interaction.reply({
         embeds: [neutralEmbed('Bu anket sona erdi. Sonuçlar anket mesajında görünüyor.', 'Anket Kapandı')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     polls.vote(id, interaction.user.id, choice);
@@ -186,7 +187,7 @@ export const componentHandlers = {
     return interaction.reply({
       embeds: [okEmbed(`Oyun **${clean(poll.options[choice], 60)}** seçeneğine kaydedildi.\n`
         + 'Fikrini değiştirirsen başka bir seçeneğe tıklaman yeterli.', '🗳️ Oyun Alındı')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 
@@ -199,7 +200,7 @@ export const componentHandlers = {
       return interaction.reply({
         embeds: [errEmbed('Bu rol artık sunucuda mevcut değil. Panelin güncellenmesi için bir yetkiliye haber ver.',
           'Rol Bulunamadı')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     const me = interaction.guild.members.me;
@@ -211,7 +212,7 @@ export const componentHandlers = {
     if (role.managed || dangerous || role.position >= me.roles.highest.position) {
       return interaction.reply({
         embeds: [errEmbed('Bu rol panel üzerinden dağıtılamıyor.', 'Rol Alınamaz')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     const member = interaction.member;
@@ -219,13 +220,13 @@ export const componentHandlers = {
       await member.roles.remove(role, 'Rol paneli');
       return interaction.reply({
         embeds: [okEmbed(`${role} rolü üzerinden kaldırıldı. Butona tekrar tıklayarak geri alabilirsin.`, 'Rol Kaldırıldı')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     await member.roles.add(role, 'Rol paneli');
     return interaction.reply({
       embeds: [okEmbed(`${role} rolü hesabına eklendi. Butona tekrar tıklayarak bırakabilirsin.`, 'Rol Verildi')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };
@@ -243,7 +244,7 @@ function notYours() {
 async function handleBildirimToggle(interaction, enable) {
   const d = confirmDecision(interaction.customId, interaction.user.id);
   if (d === 'not_owner') {
-    return interaction.reply({ embeds: [notYours()], ephemeral: true });
+    return interaction.reply({ embeds: [notYours()], flags: MessageFlags.Ephemeral });
   }
   if (d === 'expired') {
     return interaction.update({

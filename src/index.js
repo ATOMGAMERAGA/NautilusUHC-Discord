@@ -1,7 +1,7 @@
 import {
   Client, GatewayIntentBits, Partials, ActivityType, Events, MessageFlags,
 } from 'discord.js';
-import { config } from './config.js';
+import { config, logConfigIssues } from './config.js';
 import { hasTier, tierName } from './permissions.js';
 import { errEmbed, failureEmbed } from './embeds.js';
 import { resolveComponent } from './components.js';
@@ -28,6 +28,10 @@ import { dispatchMatchDms } from './matchdm.js';
 import { handleTierChangeEvent } from './rolesync.js';
 import { startStatusBoard } from './statusboard.js';
 import { registerTicketMessages, startTicketWatcher } from './tickets.js';
+
+// Sessiz yanlış yapılandırma kullanıcıya sahte "kod geçersiz" hatası olarak
+// yansıdığı için açılışta gürültülü şekilde bildirilir (bkz. config.js).
+logConfigIssues();
 
 const allCommands = [
   ...moderation, ...mc, ...mac, ...link, ...admin, ...utility, ...stats, ...fun, ...destek,

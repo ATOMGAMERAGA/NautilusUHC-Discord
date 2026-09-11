@@ -1,10 +1,11 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { Tier } from '../permissions.js';
 import { baseEmbed, brandFooter, Colors } from '../embeds.js';
 import { db, pendingTaskCount, ticketsV2, getSetting } from '../db.js';
 import { mcapi } from '../mcapi.js';
 import { bridgeQueue } from '../bridgequeue.js';
-import { formatDuration } from '../util.js';
+import { config } from '../config.js';
+import { formatDuration, discordTime } from '../util.js';
 
 /**
  * /sağlık — bot sağlık paneli (Rehber+): uptime, DB, köprü erişimi,
@@ -28,7 +29,7 @@ export default [
       .setName('sağlık')
       .setDescription('Botun sağlık durumunu gösterir: uptime, veritabanı, köprü, görev kuyruğu'),
     async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       // DB: hızlı SELECT — hata fırlatırsa DB gerçekten sorunlu demektir.
       let dbOk = false;
@@ -74,6 +75,19 @@ export default [
               : '🟡 Bağlı değil',
             inline: true,
           },
+          {
+            name: 'Son yoklama',
+            value: queue.lastPollAt ? discordTime(queue.lastPollAt, 'R') : '—',
+            inline: true,
+          },
+          {
+            // Birden fazla instance = hesap bağlama isteğinin hangi sunucuya
+            // gideceği belirsiz demektir; bu yüzden ayrıca gösterilir.
+            name: 'Aktif poller',
+            value: `${queue.pollers} açık • ${queue.instances} instance`
+              + (queue.instances > 1 ? ' ⚠️' : ''),
+            inline: true,
+          },
           { name: 'Bekleyen görev', value: String(pending), inline: true },
           { name: 'Açık destek talebi', value: String(openTickets), inline: true },
           {
@@ -93,6 +107,24 @@ export default [
           name: 'Öneri',
           value: 'Plugin bota bağlanmıyor. Minecraft sunucusu kapalı olabilir ya da '
             + 'plugin `config.yml` içindeki `bridge.bot-url` / `bridge.token` değerleri eksik olabilir.',
+          inline: false,
+        });
+      }
+      if (queue.instances > 1) {
+        embed.addFields({
+          name: 'Uyarı — birden fazla plugin',
+          value: `Köprüye **${queue.instances}** plugin instance bağlı. Hesap bağlama doğrulaması `
+            + 'rastgele bir sunucuya gitmemesi için bu durumda BLOKLANIR.\n'
+            + 'Fazladan Minecraft sunucusunu/konteynerini kapat ya da her instance\'a ayrı '
+            + '`BRIDGE_INSTANCE_ID` ver ve yalnız birini bu bota bağla.',
+          inline: false,
+        });
+      }
+      if (config.mcApiUrlError) {
+        embed.addFields({
+          name: 'Uyarı — MC_API_URL',
+          value: 'MC_API_URL doğrulamayı geçemedi; doğrudan bağlantı yedeği kapalı. '
+            + 'Ayrıntı bot loglarında (`[config]`).',
           inline: false,
         });
       }

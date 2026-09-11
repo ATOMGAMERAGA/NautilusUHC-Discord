@@ -216,6 +216,32 @@ aşımına uğrar ve kullanıcı temiz bir Türkçe hata görür — asla asıl�
 `MC_API_URL` yalnızca plugin köprüye bağlı DEĞİLKEN kullanılan eski doğrudan
 bağlantı yedeğidir; normal kurulumda **boş bırakılır**.
 
+### `MC_API_URL` doğrulaması ve hesap bağlama
+
+Açılışta `MC_API_URL` doğrulanır (`src/config.js → validateMcApiUrl`):
+
+* **Boş** → geçerli; ters köprü (outbound) modu.
+* **Dolu** → mutlak bir `http://` / `https://` adresi olmak zorundadır.
+* **Botun kendi adresi** (`BOT_PUBLIC_URL` ya da botun dinlediği loopback portu)
+  → açılışta `[config]` hata satırı basılır ve **doğrudan yedek kapatılır**.
+  Aksi hâlde bot kendi `/api/link/verify` ucuna istek atar, kendi HTTP sunucusu
+  bu yolu tanımadığı için `404 {"error":"not_found"}` döner ve oyuncu doğru kodu
+  girdiği hâlde "kod geçersiz" görürdü.
+
+Hesap bağlama kararı `src/linkflow.js` içinde verilir: **"kod geçersiz/süresi
+dolmuş" yalnızca plugin açıkça `invalid_code` / `expired_code` dediğinde**
+gösterilir. HTTP 400/404 tek başına kod hatası sayılmaz; `not_found`,
+`missing_fields`, `unauthorized`, zaman aşımı ve 5xx yanıtları köprü/ayar
+hatası olarak anlatılır. Doğrulamanın tek doğruluk kaynağı plugin'dir — bot
+kod üretmez, saklamaz.
+
+Aynı `BRIDGE_SECRET` ile birden fazla plugin bağlanırsa doğrulama rastgele bir
+sunucuya gönderilmez: bot `multiple_plugin_instances` hatası verir. Kesin ayrım
+için plugin tarafında `BRIDGE_INSTANCE_ID` ayarlanır ve yoklama isteklerinde
+`X-Bridge-Instance` başlığıyla gönderilir (başlıksız eski pluginler çalışmaya
+devam eder). `/sağlık` çıktısı plugin bağlantısını, son yoklama zamanını ve
+aktif poller/instance sayısını gösterir.
+
 ## Bridge güvenliği (Faz 2)
 
 Köprü artık **HMAC-SHA256** ile imzalanır (`X-Nautilus-Timestamp/Nonce/Signature`),
