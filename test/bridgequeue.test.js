@@ -109,6 +109,83 @@ test('kuyruk: stats() teşhis bilgisi verir', async () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Plugin instance kimliği (birden fazla sunucu koruması)              */
+/* ------------------------------------------------------------------ */
+
+test('kuyruk: kimliksiz yoklama tek anonim instance sayılır (geriye uyumluluk)', async () => {
+  const q = createBridgeQueue();
+  await q.takeJobs(0);
+  await q.takeJobs(0);
+  assert.deepEqual(q.activeInstances(), ['ip:bilinmeyen']);
+  assert.equal(q.stats().instances, 1);
+});
+
+test('kuyruk: iki farklı instance yoklarsa ikisi de görülür', async () => {
+  const q = createBridgeQueue();
+  await q.takeJobs(0, { instanceId: 'mc-canli' });
+  await q.takeJobs(0, { instanceId: 'mc-test' });
+  assert.deepEqual(q.activeInstances().sort(), ['mc-canli', 'mc-test']);
+  assert.equal(q.stats().instances, 2, 'belirsizlik tespit edilebilmeli');
+});
+
+test('kuyruk: instance kaydı bağlantı penceresi dışında düşer', async () => {
+  let clock = 1_000_000;
+  const q = createBridgeQueue({ now: () => clock });
+  await q.takeJobs(0, { instanceId: 'mc-eski' });
+  clock += 30_000;
+  await q.takeJobs(0, { instanceId: 'mc-yeni' });
+  assert.equal(q.activeInstances().length, 2);
+
+  // Bağlantı penceresi 60 sn: mc-eski 75 sn önce, mc-yeni 45 sn önce yokladı.
+  clock += 45_000;
+  assert.deepEqual(q.activeInstances(), ['mc-yeni']);
+});
+
+test('kuyruk: hedefli iş yalnız hedef instance\'a teslim edilir', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/link/verify', targetInstance: 'mc-canli' }, 2000);
+
+  const yanlis = await q.takeJobs(0, { instanceId: 'mc-test' });
+  assert.deepEqual(yanlis, [], 'iş yanlış instance\'a verilmemeli');
+
+  const dogru = await q.takeJobs(0, { instanceId: 'mc-canli' });
+  assert.equal(dogru.length, 1);
+  q.completeJob(dogru[0].jobId, 200, { mc: 'Oyuncu1' });
+  assert.deepEqual((await promise).data, { mc: 'Oyuncu1' });
+});
+
+test('kuyruk: hedefsiz iş herhangi bir instance tarafından alınır', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/status' }, 2000);
+  const jobs = await q.takeJobs(0, { instanceId: 'mc-test' });
+  assert.equal(jobs.length, 1);
+  q.completeJob(jobs[0].jobId, 200, {});
+  await promise;
+});
+
+test('kuyruk: bekleyen yoklamacı hedefli işi yalnız kendisi içinse alır', async () => {
+  const q = createBridgeQueue();
+  const bekleyen = q.takeJobs(300, { instanceId: 'mc-test' });
+  const promise = q.enqueue({ path: '/api/link/verify', targetInstance: 'mc-canli' }, 2000);
+
+  assert.deepEqual(await bekleyen, [], 'başka instance\'ın işi teslim edilmemeli');
+  const dogru = await q.takeJobs(0, { instanceId: 'mc-canli' });
+  assert.equal(dogru.length, 1);
+  q.completeJob(dogru[0].jobId, 200, {});
+  await promise;
+});
+
+test('kuyruk: stats() açık poller ve instance sayısını verir', async () => {
+  const q = createBridgeQueue();
+  const bekleyen = q.takeJobs(200, { instanceId: 'mc-canli' });
+  assert.equal(q.stats().pollers, 1);
+  assert.equal(q.stats().instances, 1);
+  assert.ok(q.stats().lastPollAt > 0, 'son yoklama zamanı görünmeli');
+  await bekleyen;
+  assert.equal(q.stats().pollers, 0);
+});
+
+/* ------------------------------------------------------------------ */
 /* Public stats proxy                                                  */
 /* ------------------------------------------------------------------ */
 

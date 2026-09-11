@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { getSetting, processedEvents } from './db.js';
 import { baseEmbed, brandFooter, Colors, Assets, Brand } from './embeds.js';
 import { trDateTime, discordTime, formatSeconds, clean, codeText } from './util.js';
-import { bridgeQueue, MAX_POLL_WAIT_MS } from './bridgequeue.js';
+import { bridgeQueue, MAX_POLL_WAIT_MS, ANONYMOUS_INSTANCE_PREFIX } from './bridgequeue.js';
 import { publicStats } from './statsproxy.js';
 
 /**
@@ -135,6 +135,22 @@ function rateLimited(ip, { limit = 60, windowMs = 60_000, now = Date.now(), buck
   arr.push(now);
   rateBuckets.set(key, arr);
   return arr.length > limit;
+}
+
+/**
+ * Yoklayan plugin'in kimliği. Yeni pluginler `X-Bridge-Instance` başlığı (ya da
+ * `?instance=`) gönderir; eski pluginler hiçbir şey göndermez ve kimlik IP'den
+ * türetilir. GERİYE UYUMLU: başlıksız plugin çalışmaya devam eder, yalnız iki
+ * ayrı sunucu aynı IP'nin arkasındaysa ayırt edilemez — kesin ayrım için
+ * plugin tarafında BRIDGE_INSTANCE_ID ayarlanmalıdır.
+ *
+ * Bu değer kimlik DOĞRULAMASI değildir (o HMAC/paylaşılan sır işidir); yalnız
+ * teşhis ve iş yönlendirme içindir.
+ */
+export function pollInstanceId(req, url, ip) {
+  const raw = req.headers['x-bridge-instance'] ?? url.searchParams.get('instance') ?? '';
+  const id = String(raw).trim().slice(0, 64);
+  return id ? id : `${ANONYMOUS_INSTANCE_PREFIX}${ip}`;
 }
 
 /** Public stats uçlarının kökü — site bu yolu okur, kimlik doğrulaması YOKTUR. */
@@ -488,7 +504,9 @@ export function createRequestHandler(client, hooks = {}) {
       const wait = Number.isFinite(asked) && asked >= 0
         ? Math.min(asked, MAX_POLL_WAIT_MS)
         : MAX_POLL_WAIT_MS;
-      return bridgeQueue.takeJobs(wait).then((jobs) => respond(200, { ok: true, jobs }));
+      const instanceId = pollInstanceId(req, url, ip);
+      return bridgeQueue.takeJobs(wait, { instanceId })
+        .then((jobs) => respond(200, { ok: true, jobs, instanceId }));
     }
 
     if (path === '/api/bridge/jobs/result' && req.method === 'POST') {

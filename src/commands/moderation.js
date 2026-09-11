@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, MessageFlags } from 'discord.js';
 import { Tier, tierOf, outranks, hasTier } from '../permissions.js';
 import {
   okEmbed, errEmbed, baseEmbed, emptyEmbed, brandFooter, Colors, Brand,
@@ -78,7 +78,7 @@ function punishGuard(interaction, member, { needBot = true } = {}) {
 
 /** Tek biçimli engel yanıtı — her zaman ephemeral. */
 function blocked(interaction, message, title = 'İşlem Yapılamadı') {
-  return interaction.reply({ embeds: [errEmbed(message, title)], ephemeral: true });
+  return interaction.reply({ embeds: [errEmbed(message, title)], flags: MessageFlags.Ephemeral });
 }
 
 export default [
@@ -346,7 +346,7 @@ export default [
       if (!warns.length) {
         return interaction.reply({
           embeds: [emptyEmbed('Uyarı Yok', `${user} için kayıtlı bir uyarı bulunmuyor.`)],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       const embed = baseEmbed(Colors.warn)
@@ -354,7 +354,7 @@ export default [
         .setDescription(warns.slice(0, 15).map((w) =>
           `**#${w.id}** • ${discordTime(w.created_at, 'd')} • <@${w.mod_id}>\n${clean(w.reason, 150)}`).join('\n\n'))
         .setFooter(brandFooter(`${warns.length} uyarı`));
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     },
   },
 
@@ -402,7 +402,7 @@ export default [
       const user = interaction.options.getUser('kullanıcı');
       const onlyBots = interaction.options.getBoolean('bot') ?? false;
       const needle = interaction.options.getString('içerik')?.toLowerCase();
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       let messages = await interaction.channel.messages.fetch({ limit: 100 });
       if (user) messages = messages.filter((m) => m.author.id === user.id);
       if (onlyBots) messages = messages.filter((m) => m.author.bot);
@@ -632,7 +632,7 @@ export default [
         return interaction.reply({
           embeds: [okEmbed(`${user} için **#${id}** numaralı not kaydedildi. Notları yalnız yetkililer görür.`,
             '📝 Not Eklendi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       if (sub === 'sil') {
@@ -645,7 +645,7 @@ export default [
         }
         addCase('note_delete', user.id, interaction.user.id, null, `#${id}`);
         return interaction.reply({
-          embeds: [okEmbed(`**#${id}** numaralı not silindi.`, '🗑️ Not Silindi')], ephemeral: true,
+          embeds: [okEmbed(`**#${id}** numaralı not silindi.`, '🗑️ Not Silindi')], flags: MessageFlags.Ephemeral,
         });
       }
       // liste
@@ -653,7 +653,7 @@ export default [
       if (!notes.length) {
         return interaction.reply({
           embeds: [emptyEmbed('Not Yok', `${user} için kayıtlı bir yetkili notu bulunmuyor.`)],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       const embed = baseEmbed(Colors.info)
@@ -662,7 +662,7 @@ export default [
           `**#${n.id}** • ${discordTime(n.created_at, 'd')} • <@${n.author_id}>\n${clean(n.note, 200)}`)
           .join('\n\n'))
         .setFooter(brandFooter(`${userNotes.count(user.id)} not`));
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     },
   },
 
@@ -677,7 +677,7 @@ export default [
       .addSubcommand((s) => s.setName('bitir').setDescription('Lockdown\'ı kaldırır (yalnız kilitlenen kanalları açar)')),
     async execute(interaction) {
       const sub = interaction.options.getSubcommand();
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const everyone = interaction.guild.roles.everyone;
 
       if (sub === 'başlat') {

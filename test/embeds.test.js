@@ -109,6 +109,19 @@ test('classifyBridgeError: HTTP durumları anlamlı sınıflara ayrılır', () =
   assert.equal(classifyBridgeError({ error: 'fetch failed' }).kind, 'unreachable');
 });
 
+test('classifyBridgeError: taşıma hata kodları status\'tan önce gelir', () => {
+  // Bunların HTTP karşılığı yoktur; "kayıt bulunamadı" gibi yanlış bir anlama
+  // düşerlerse kullanıcı hatayı kendi girdisinde arar.
+  assert.equal(classifyBridgeError({ errorCode: 'plugin_not_connected' }).kind, 'not_connected');
+  assert.equal(classifyBridgeError({ errorCode: 'bridge_misconfigured' }).kind, 'misconfigured');
+  assert.equal(
+    classifyBridgeError({ errorCode: 'multiple_plugin_instances' }).kind,
+    'ambiguous_plugin_instance',
+  );
+  // Backend'den gelen gerçek HTTP kodları eskisi gibi sınıflanır.
+  assert.equal(classifyBridgeError({ status: 404, errorCode: 'not_found' }).kind, 'not_found');
+});
+
 test('ham backend hatası kullanıcıya sızmaz', () => {
   const cases = [
     { ok: false, error: 'ECONNRESET http://10.0.0.4:25000/api/status' },

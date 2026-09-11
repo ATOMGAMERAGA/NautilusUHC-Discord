@@ -22,6 +22,25 @@ import { randomUUID } from 'node:crypto';
  *
  * Plugin bağlı değilse iş zaman aşımına uğrar ve çağıran taraf temiz bir
  * Türkçe hata görür (asla asılı kalmaz).
+ *
+ * INSTANCE KİMLİĞİ (geriye uyumlu)
+ * --------------------------------
+ * Kuyruk eskiden tamamen anonimdi: yokluyan HERHANGİ bir plugin HERHANGİ bir
+ * işi alabiliyordu. Aynı `BRIDGE_SECRET` ile iki Minecraft sunucusu bağlanırsa
+ * (test + canlı, ya da eski konteyner kapanmamışsa) hesap bağlama doğrulaması
+ * rastgele birine gider; kodu ÜRETMEYEN sunucu `invalid_code` döner ve oyuncu
+ * sahte bir "kod geçersiz" mesajı görür.
+ *
+ * Bu yüzden her yoklama bir KİMLİK taşır:
+ *   - Yeni plugin: `X-Bridge-Instance: <BRIDGE_INSTANCE_ID>` başlığı (veya
+ *     `?instance=` sorgu parametresi).
+ *   - Eski plugin: başlık yok → httpserver kimliği IP'den türetir (`ip:…`).
+ * Kimlikler yalnız TEŞHİS ve YÖNLENDİRME içindir; kimlik doğrulaması
+ * değildir (o hâlâ HMAC/paylaşılan sır işidir).
+ *
+ * `enqueue({ targetInstance })` verilen iş yalnız o instance'a teslim edilir.
+ * Eski pluginler hiç açık kimlik göndermediği için onlara ASLA hedefli iş
+ * yazılmaz — protokol geriye uyumludur.
  */
 
 /** Bir işin sonucu için beklenecek varsayılan süre (ms). */
@@ -41,37 +60,85 @@ const MAX_PENDING = 200;
  */
 const CONNECTED_WINDOW_MS = MAX_POLL_WAIT_MS * 2 + 10_000;
 
+/** Açık kimlik göndermeyen (eski) pluginler için kullanılan kimlik öneki. */
+export const ANONYMOUS_INSTANCE_PREFIX = 'ip:';
+
 export function createBridgeQueue({ now = Date.now } = {}) {
   /** Henüz plugin'e teslim EDİLMEMİŞ işler (FIFO). */
   const pending = [];
   /** jobId → { resolve, reject, timer } — sonucu bekleyen çağıranlar. */
   const waiting = new Map();
-  /** Boşta bekleyen uzun-yoklama istekleri: { deliver, timer }. */
+  /** Boşta bekleyen uzun-yoklama istekleri: { deliver, timer, instanceId }. */
   const pollers = [];
+  /** instanceId → son yoklama zamanı (ms). */
+  const instances = new Map();
 
   let lastPollAt = 0;
 
-  /** Kuyrukta iş varsa bekleyen bir yoklamacıya hemen teslim et. */
+  /** Pencere dışına düşmüş instance kayıtlarını atar. */
+  function pruneInstances(at = now()) {
+    for (const [id, seen] of instances) {
+      if (at - seen >= CONNECTED_WINDOW_MS) instances.delete(id);
+    }
+  }
+
+  /**
+   * Son CONNECTED_WINDOW_MS içinde yoklama yapmış instance kimlikleri.
+   * Uzunluğu 1'den büyükse köprüde BİRDEN FAZLA plugin var demektir.
+   */
+  function activeInstances() {
+    pruneInstances();
+    return [...instances.keys()];
+  }
+
+  /** Verilen instance'ın alabileceği işleri kuyruktan çeker. */
+  function claimJobs(instanceId) {
+    const taken = [];
+    for (let i = 0; i < pending.length;) {
+      const job = pending[i];
+      if (!job.targetInstance || job.targetInstance === instanceId) {
+        taken.push(job);
+        pending.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+    return taken;
+  }
+
+  /** Kuyrukta iş varsa bekleyen uygun bir yoklamacıya hemen teslim et. */
   function flush() {
-    while (pollers.length > 0 && pending.length > 0) {
-      const poller = pollers.shift();
+    for (let i = 0; i < pollers.length && pending.length > 0;) {
+      const poller = pollers[i];
+      const jobs = claimJobs(poller.instanceId);
+      if (jobs.length === 0) {
+        i++;
+        continue;
+      }
+      pollers.splice(i, 1);
       clearTimeout(poller.timer);
-      poller.deliver(pending.splice(0, pending.length));
+      poller.deliver(jobs);
     }
   }
 
   /**
    * Bir MC isteğini kuyruğa koyar ve sonucunu bekler.
+   * @param {{method?:string, path:string, body?:object|null, targetInstance?:string|null}} req
    * @returns {Promise<{status:number, data:object}>} plugin'in yanıtı
    * @throws  {Error} zaman aşımı veya kuyruk dolu
    */
-  function enqueue({ method = 'GET', path, body = null }, timeoutMs = DEFAULT_JOB_TIMEOUT_MS) {
+  function enqueue(
+    { method = 'GET', path, body = null, targetInstance = null },
+    timeoutMs = DEFAULT_JOB_TIMEOUT_MS,
+  ) {
     if (!path) return Promise.reject(new Error('Köprü isteği için yol (path) gerekli.'));
     if (pending.length >= MAX_PENDING) {
       return Promise.reject(new Error('Köprü kuyruğu dolu; Minecraft sunucusu yanıt vermiyor.'));
     }
     const jobId = randomUUID();
-    const job = { jobId, method, path, body };
+    // targetInstance protokolde yeni bir alandır; eski pluginler bilmediği
+    // alanı yok sayar, dolayısıyla gövde geriye uyumludur.
+    const job = { jobId, method, path, body, targetInstance };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         waiting.delete(jobId);
@@ -88,16 +155,24 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   /**
    * Uzun-yoklama: bekleyen işleri döndürür. İş yoksa en fazla `waitMs` bekler
    * ve boş dizi döner (plugin hemen yeniden yoklar).
+   *
+   * @param {number} waitMs
+   * @param {{instanceId?: string}} [opts] plugin kimliği (yoksa 'legacy')
    */
-  function takeJobs(waitMs = MAX_POLL_WAIT_MS) {
-    lastPollAt = now();
-    if (pending.length > 0) {
-      return Promise.resolve(pending.splice(0, pending.length));
-    }
+  function takeJobs(waitMs = MAX_POLL_WAIT_MS, { instanceId = `${ANONYMOUS_INSTANCE_PREFIX}bilinmeyen` } = {}) {
+    const at = now();
+    lastPollAt = at;
+    instances.set(instanceId, at);
+    pruneInstances(at);
+
+    const ready = claimJobs(instanceId);
+    if (ready.length > 0) return Promise.resolve(ready);
+
     const hold = Math.max(0, Math.min(Number(waitMs) || 0, MAX_POLL_WAIT_MS));
     if (hold === 0) return Promise.resolve([]);
     return new Promise((resolve) => {
       const entry = {
+        instanceId,
         deliver: (jobs) => {
           const idx = pollers.indexOf(entry);
           if (idx >= 0) pollers.splice(idx, 1);
@@ -129,14 +204,19 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     return lastPollAt > 0 && now() - lastPollAt < CONNECTED_WINDOW_MS;
   }
 
-  /** Teşhis için (/saglik, /admin köprü). */
+  /** Teşhis için (/sağlık, /admin köprü). */
   function stats() {
+    const active = activeInstances();
     return {
       connected: pluginConnected(),
       lastPollAt: lastPollAt || null,
       pending: pending.length,
       waiting: waiting.size,
+      /** Şu anda AÇIK tutulan uzun-yoklama sayısı. */
       pollers: pollers.length,
+      /** Son pencerede görülen farklı plugin instance sayısı. */
+      instances: active.length,
+      instanceIds: active,
     };
   }
 
@@ -153,10 +233,13 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       clearTimeout(poller.timer);
       poller.deliver([]);
     }
+    instances.clear();
     lastPollAt = 0;
   }
 
-  return { enqueue, takeJobs, completeJob, pluginConnected, stats, reset };
+  return {
+    enqueue, takeJobs, completeJob, pluginConnected, activeInstances, stats, reset,
+  };
 }
 
 /** Süreç genelinde tek kuyruk — httpserver ve mcapi bunu paylaşır. */

@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  MessageFlags,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
 import { okEmbed, errEmbed, baseEmbed, neutralEmbed, brandFooter, Colors } from '../embeds.js';
@@ -33,7 +34,7 @@ export default [
         if (!durationMs) {
           return interaction.reply({
             embeds: [errEmbed('Süreyi anlayamadım. Örnek: `30dk`, `2sa`, `1g`.', 'Geçersiz Süre')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const prize = interaction.options.getString('ödül', true);
@@ -65,7 +66,7 @@ export default [
         return interaction.reply({
           embeds: [okEmbed(`**#${id}** numaralı çekiliş bu kanalda yayında. Kazananlar ${discordTime(endsAt, 'R')} otomatik çekilecek.`,
             '🎉 Çekiliş Başladı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -74,17 +75,17 @@ export default [
       if (!gw) {
         return interaction.reply({
           embeds: [errEmbed(`**#${id}** numaralı bir çekiliş yok.`, 'Çekiliş Bulunamadı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
       if (sub === 'bitir') {
         if (gw.ended) {
           return interaction.reply({
-            embeds: [neutralEmbed('Bu çekiliş zaten sonuçlandı.', 'Çekiliş Kapalı')], ephemeral: true,
+            embeds: [neutralEmbed('Bu çekiliş zaten sonuçlandı.', 'Çekiliş Kapalı')], flags: MessageFlags.Ephemeral,
           });
         }
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         await endGiveaway(interaction.client, id);
         return interaction.editReply({
           embeds: [okEmbed(`**#${id}** çekilişi erken bitirildi ve kazananlar duyuruldu.`, '🎉 Çekiliş Sonuçlandı')],
@@ -95,10 +96,10 @@ export default [
       if (!gw.ended) {
         return interaction.reply({
           embeds: [errEmbed('Bu çekiliş hâlâ devam ediyor. Önce `/çekiliş bitir` kullan.', 'Çekiliş Sürüyor')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const winners = await endGiveaway(interaction.client, id, { reroll: true });
       return interaction.editReply({
         embeds: [winners?.length
@@ -132,7 +133,7 @@ export default [
           return interaction.reply({
             embeds: [errEmbed('Anket için en az 2 seçenek gerekiyor. Seçenekleri `;` ile ayır.\n'
               + 'Örnek: `Evet;Hayır;Kararsızım`', 'Seçenekler Eksik')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const rawDuration = interaction.options.getString('süre');
@@ -142,7 +143,7 @@ export default [
           if (!ms) {
             return interaction.reply({
               embeds: [errEmbed('Süreyi anlayamadım. Örnek: `1sa`, `1g`.', 'Geçersiz Süre')],
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
             });
           }
           endsAt = Date.now() + ms;
@@ -169,7 +170,7 @@ export default [
           embeds: [okEmbed(`**#${id}** numaralı anket bu kanalda yayında.`
             + (endsAt ? ` Sonuçlar ${discordTime(endsAt, 'R')} otomatik açıklanacak.` : ' Bitirmek için `/anket bitir` kullan.'),
           '📊 Anket Başladı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -177,15 +178,15 @@ export default [
       const poll = polls.get(id);
       if (!poll) {
         return interaction.reply({
-          embeds: [errEmbed(`**#${id}** numaralı bir anket yok.`, 'Anket Bulunamadı')], ephemeral: true,
+          embeds: [errEmbed(`**#${id}** numaralı bir anket yok.`, 'Anket Bulunamadı')], flags: MessageFlags.Ephemeral,
         });
       }
       if (poll.ended) {
         return interaction.reply({
-          embeds: [neutralEmbed('Bu anket zaten sonuçlandı.', 'Anket Kapalı')], ephemeral: true,
+          embeds: [neutralEmbed('Bu anket zaten sonuçlandı.', 'Anket Kapalı')], flags: MessageFlags.Ephemeral,
         });
       }
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await endPoll(interaction.client, id);
       return interaction.editReply({
         embeds: [okEmbed(`**#${id}** anketi kapatıldı, sonuçlar anket mesajında yayınlandı.`, '📊 Anket Bitti')],
@@ -205,13 +206,13 @@ export default [
       if (!ms) {
         return interaction.reply({
           embeds: [errEmbed('Süreyi anlayamadım. Örnek: `10dk`, `2sa`, `1g`.', 'Geçersiz Süre')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       if (ms > 30 * 86_400_000) {
         return interaction.reply({
           embeds: [errEmbed('Hatırlatıcı en fazla 30 gün sonrasına kurulabilir.', 'Süre Çok Uzun')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       const message = interaction.options.getString('mesaj', true);
@@ -224,7 +225,7 @@ export default [
       return interaction.reply({
         embeds: [okEmbed(`${discordTime(dueAt, 'R')} bu kanalda seni etiketleyeceğim.\n> ${clean(message, 200)}`,
           '⏰ Hatırlatıcı Kuruldu')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     },
   },

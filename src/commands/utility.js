@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChannelType } from 'discord.js';
+import { SlashCommandBuilder, ChannelType, MessageFlags } from 'discord.js';
 import { Tier, tierOf, tierName } from '../permissions.js';
 import { baseEmbed, brandFooter, Colors, Assets, Brand } from '../embeds.js';
 import { discordTime, codeText } from '../util.js';
@@ -120,7 +120,10 @@ export default [
     tier: Tier.MEMBER,
     data: new SlashCommandBuilder().setName('ping').setDescription('Botun gecikme süresini ölçer'),
     async execute(interaction) {
-      const sent = await interaction.reply({ content: 'Ölçülüyor…', fetchReply: true });
+      // reply({ fetchReply: true }) discord.js v14'te kullanımdan kaldırıldı;
+      // mesajı ayrı bir fetchReply() ile alıyoruz (davranış aynı).
+      await interaction.reply({ content: 'Ölçülüyor…' });
+      const sent = await interaction.fetchReply();
       const rtt = sent.createdTimestamp - interaction.createdTimestamp;
       const api = Math.round(interaction.client.ws.ping);
       await interaction.editReply({
@@ -222,7 +225,7 @@ export default [
           + 'Oyun içinde `/komutlar` yazarsan aynı listeyi tıklanabilir menü olarak görürsün.')
         .addFields(MC_COMMAND_GROUPS)
         .setFooter(brandFooter('Yetki gerektiren komutlar yalnız yetkililerde görünür'));
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     },
   },
 
@@ -239,7 +242,7 @@ export default [
           + 'Oyun içi komutlar için `/komutlar` kullanabilirsin.')
         .addFields(groups)
         .setFooter(brandFooter(`Yetki kademen: ${tierName(tier)}`));
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     },
   },
 ];

@@ -59,9 +59,10 @@ function sign(rawBody, { ts = Date.now(), nonce = randomUUID() } = {}) {
 }
 
 /** Uzun-yoklama isteği (gövde boş → imza da boş gövde üzerinden). */
-function poll(wait = 0, headers = null) {
+function poll(wait = 0, headers = null, instanceId = null) {
+  const extra = instanceId ? { 'X-Bridge-Instance': instanceId } : {};
   return fetch(`${base}/api/bridge/jobs?wait=${wait}`, {
-    headers: headers ?? sign(''),
+    headers: { ...(headers ?? sign('')), ...extra },
   });
 }
 
@@ -149,6 +150,33 @@ test('yoklama: iş yokken boş liste döner', async () => {
   const { ok, jobs } = await (await poll(0)).json();
   assert.equal(ok, true);
   assert.deepEqual(jobs, []);
+});
+
+/* ------------------------------------------------------------------ */
+/* Plugin instance kimliği (hesap bağlama belirsizliğine karşı)        */
+/* ------------------------------------------------------------------ */
+
+test('yoklama: X-Bridge-Instance başlığı kimliği taşır ve yanıtta yankılanır', async () => {
+  bridgeQueue.reset();
+  const res = await poll(0, null, 'mc-canli');
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).instanceId, 'mc-canli');
+  assert.deepEqual(bridgeQueue.activeInstances(), ['mc-canli']);
+});
+
+test('yoklama: başlıksız (eski) plugin IP tabanlı kimlik alır — geriye uyumlu', async () => {
+  bridgeQueue.reset();
+  const res = await poll(0);
+  assert.equal(res.status, 200);
+  assert.match((await res.json()).instanceId, /^ip:/);
+  assert.equal(bridgeQueue.activeInstances().length, 1);
+});
+
+test('yoklama: iki farklı instance köprüde belirsizlik olarak görünür', async () => {
+  bridgeQueue.reset();
+  await poll(0, null, 'mc-canli');
+  await poll(0, null, 'mc-test');
+  assert.equal(bridgeQueue.stats().instances, 2);
 });
 
 /* ------------------------------------------------------------------ */

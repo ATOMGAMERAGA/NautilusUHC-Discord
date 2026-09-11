@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { Tier, tierOf } from '../permissions.js';
 import {
   openTicket, closeTicket, reopenTicket, addUserToTicket, removeUserFromTicket, statusLine,
@@ -88,7 +88,7 @@ export default [
         if (tier < Tier.BMOD) {
           return interaction.reply({
             embeds: [errEmbed('Destek kara listesi **Baş Mod** ve üzeri yetkililere açıktır.', 'Yetki Gerekli')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const user = interaction.options.getUser('kullanıcı', true);
@@ -107,13 +107,13 @@ export default [
           });
           return interaction.reply({
             embeds: [okEmbed(`${user} artık destek talebi açamayacak.`, '🚫 Kara Listeye Eklendi')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         if (!ticketBlacklist.remove(user.id)) {
           return interaction.reply({
             embeds: [errEmbed(`${user} zaten destek kara listesinde değil.`, 'Kayıt Bulunamadı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         addCase('ticket_blacklist_remove', user.id, interaction.user.id, null, null);
@@ -127,7 +127,7 @@ export default [
         });
         return interaction.reply({
           embeds: [okEmbed(`${user} yeniden destek talebi açabilir.`, '✅ Kara Listeden Çıkarıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -135,7 +135,7 @@ export default [
       if (tier < Tier.REHBER) {
         return interaction.reply({
           embeds: [errEmbed('Bu alt komut **Rehber** ve üzeri yetkililere açıktır.', 'Yetki Gerekli')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -147,7 +147,7 @@ export default [
             embeds: [emptyEmbed('Talep Yok', status
               ? `**${STATUS_LABELS[status]}** durumunda bir destek talebi bulunmuyor.`
               : 'Kayıtlı bir destek talebi bulunmuyor.')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         return interaction.reply({
@@ -155,7 +155,7 @@ export default [
             .setTitle(`🎫 Destek Talepleri${status ? ` — ${STATUS_LABELS[status]}` : ''}`)
             .setDescription(rows.map(fmtTicketLine).join('\n'))
             .setFooter(brandFooter(`Son ${rows.length} kayıt`))],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -165,7 +165,7 @@ export default [
         return interaction.reply({
           embeds: [errEmbed(`**#${no}** numaralı bir talep kaydı yok. Açık talepleri \`/destek listele\` ile görebilirsin.`,
             'Talep Bulunamadı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -210,7 +210,7 @@ export default [
         }
         return interaction.reply({
           embeds: [embed.setFooter(brandFooter(`Talep #${ticket.id}`))],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -221,7 +221,7 @@ export default [
         return interaction.reply({
           embeds: [okEmbed(`Notun **#${ticket.id}** talebine kaydedildi. Notları yalnız yetkililer görür.`,
             '📝 Not Eklendi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -230,7 +230,7 @@ export default [
           return interaction.reply({
             embeds: [errEmbed('Kapalı bir talep atanamaz. Önce `/destek yenidenaç` ile talebi yeniden aç.',
               'Talep Kapalı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const yetkili = interaction.options.getUser('yetkili', true);
@@ -238,7 +238,7 @@ export default [
         if (!member || tierOf(member) < Tier.REHBER) {
           return interaction.reply({
             embeds: [errEmbed('Talep yalnızca **Rehber** ve üzeri bir yetkiliye atanabilir.', 'Atama Yapılamadı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         ticketsV2.claim(ticket.id, yetkili.id);
@@ -255,7 +255,7 @@ export default [
         });
         return interaction.reply({
           embeds: [okEmbed(`**#${ticket.id}** talebi ${yetkili} yetkilisine atandı.`, '✋ Talep Atandı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -264,14 +264,14 @@ export default [
         if (!PRIORITIES.includes(seviye)) {
           return interaction.reply({
             embeds: [errEmbed('Geçerli öncelikler: düşük, normal, yüksek, acil.', 'Geçersiz Öncelik')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         ticketsV2.setPriority(ticket.id, seviye);
         addCase('ticket_priority', ticket.user_id, interaction.user.id, null, `#${ticket.id} → ${seviye}`);
         return interaction.reply({
           embeds: [okEmbed(`**#${ticket.id}** artık **${PRIORITY_LABELS[seviye]}** öncelikli.`, '⚡ Öncelik Güncellendi')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -279,14 +279,14 @@ export default [
         if (ticket.status === 'closed' || !ticket.channel_id) {
           return interaction.reply({
             embeds: [errEmbed('Bu talebin aktif bir kanalı yok.', 'Kanal Bulunamadı')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
         const user = interaction.options.getUser('kullanıcı', true);
         const res = sub === 'ekle'
           ? await addUserToTicket(interaction.client, ticket, user.id)
           : await removeUserFromTicket(interaction.client, ticket, user.id);
-        if (!res.ok) return interaction.reply({ embeds: [errEmbed(res.error, 'İşlem Yapılamadı')], ephemeral: true });
+        if (!res.ok) return interaction.reply({ embeds: [errEmbed(res.error, 'İşlem Yapılamadı')], flags: MessageFlags.Ephemeral });
         addCase(sub === 'ekle' ? 'ticket_user_add' : 'ticket_user_remove',
           user.id, interaction.user.id, null, `#${ticket.id}`);
         return interaction.reply({
@@ -294,7 +294,7 @@ export default [
             ? `${user} artık **#${ticket.id}** talep kanalını görebilir ve yazabilir.`
             : `${user} **#${ticket.id}** talep kanalından çıkarıldı.`,
           sub === 'ekle' ? '➕ Kullanıcı Eklendi' : '➖ Kullanıcı Çıkarıldı')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -303,11 +303,11 @@ export default [
         if (!tr.ok && ticket.status !== 'closed') {
           return interaction.reply({
             embeds: [errEmbed(`**#${ticket.id}** hâlâ açık, yeniden açmaya gerek yok.`, 'Talep Zaten Açık')],
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
-        if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error, 'Talep Açılamadı')], ephemeral: true });
-        await interaction.deferReply({ ephemeral: true });
+        if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error, 'Talep Açılamadı')], flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const res = await reopenTicket(interaction.client, ticket.id, interaction.user);
         if (!res.ok) return interaction.editReply({ embeds: [errEmbed(res.error, 'Talep Açılamadı')] });
         return interaction.editReply({
@@ -315,7 +315,7 @@ export default [
         });
       }
 
-      return interaction.reply({ embeds: [errEmbed('Bu alt komut tanınmıyor.', 'Bilinmeyen Komut')], ephemeral: true });
+      return interaction.reply({ embeds: [errEmbed('Bu alt komut tanınmıyor.', 'Bilinmeyen Komut')], flags: MessageFlags.Ephemeral });
     },
   },
 ];

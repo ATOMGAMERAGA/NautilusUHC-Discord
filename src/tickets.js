@@ -1,7 +1,7 @@
 import {
   ChannelType, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   AttachmentBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
-  Events,
+  Events, MessageFlags,
 } from 'discord.js';
 import { config } from './config.js';
 import {
@@ -206,7 +206,7 @@ async function showCreateModal(interaction, type) {
   const t = TICKET_TYPES[type] ?? TICKET_TYPES.genel;
   const gate = openGate(interaction.user.id);
   if (!gate.ok) {
-    return interaction.reply({ embeds: [gateEmbed(gate)], ephemeral: true });
+    return interaction.reply({ embeds: [gateEmbed(gate)], flags: MessageFlags.Ephemeral });
   }
   const modal = new ModalBuilder()
     .setCustomId(`ticket:create:${TICKET_TYPES[type] ? type : 'genel'}`)
@@ -234,7 +234,7 @@ async function showCreateModal(interaction, type) {
 }
 
 async function createTicket(interaction, type) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const gate = openGate(interaction.user.id);
   if (!gate.ok) return interaction.editReply({ embeds: [gateEmbed(gate)] });
 
@@ -318,7 +318,7 @@ export async function closeTicket(interaction) {
     return interaction.reply({
       embeds: [errEmbed('Bu komut yalnızca destek talebi kanallarında çalışır.\n'
         + 'Yeni bir talep açmak için `/destek aç` kullanabilirsin.', 'Destek Kanalı Değil')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   return startCloseConfirm(interaction, ticket);
@@ -336,7 +336,7 @@ async function startCloseConfirm(interaction, ticket) {
   if (!canClose(interaction, ticket)) {
     return interaction.reply({
       embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
   return interaction.reply({
@@ -351,7 +351,7 @@ async function startCloseConfirm(interaction, ticket) {
       new ButtonBuilder().setCustomId(`ticket:closecancel:${ticket.id}`)
         .setLabel('Vazgeç').setStyle(ButtonStyle.Secondary),
     )],
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -369,7 +369,7 @@ function ratingRow(ticketId) {
 async function performClose(interaction, ticket, reason) {
   const tr = applyTransition(ticket, 'closed');
   if (!tr.ok) {
-    return interaction.reply({ embeds: [errEmbed(tr.error, 'Talep Kapatılamadı')], ephemeral: true });
+    return interaction.reply({ embeds: [errEmbed(tr.error, 'Talep Kapatılamadı')], flags: MessageFlags.Ephemeral });
   }
   await interaction.deferReply().catch(() => null);
 
@@ -559,14 +559,14 @@ function staffOnlyEmbed(action) {
 export const ticketComponents = {
   'ticket:open': (interaction) => {
     if (!ticketsEnabled()) {
-      return interaction.reply({ embeds: [systemOffEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [systemOffEmbed()], flags: MessageFlags.Ephemeral });
     }
     return openTicket(interaction);
   },
 
   'ticket:type': async (interaction) => {
     if (!ticketsEnabled()) {
-      return interaction.reply({ embeds: [systemOffEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [systemOffEmbed()], flags: MessageFlags.Ephemeral });
     }
     const type = interaction.values?.[0];
     return showCreateModal(interaction, TICKET_TYPES[type] ? type : 'genel');
@@ -580,7 +580,7 @@ export const ticketComponents = {
   'ticket:claim': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], flags: MessageFlags.Ephemeral });
     }
     const tier = tierOf(interaction.member);
     if (ticket.assignee_id) {
@@ -589,7 +589,7 @@ export const ticketComponents = {
         return interaction.reply({
           embeds: [errEmbed('Bir talebi yalnızca onu üstlenen yetkili ya da Baş Mod ve üzeri bırakabilir.',
             'Talep Bırakılamaz')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
       ticketsV2.unclaim(ticket.id);
@@ -602,7 +602,7 @@ export const ticketComponents = {
       }).catch(() => null);
     }
     if (tier < Tier.REHBER) {
-      return interaction.reply({ embeds: [staffOnlyEmbed('Talep üstlenme')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Talep üstlenme')], flags: MessageFlags.Ephemeral });
     }
     ticketsV2.claim(ticket.id, interaction.user.id);
     ticketsV2.setFirstResponse(ticket.id);
@@ -618,10 +618,10 @@ export const ticketComponents = {
   'ticket:prio': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], flags: MessageFlags.Ephemeral });
     }
     if (tierOf(interaction.member) < Tier.REHBER) {
-      return interaction.reply({ embeds: [staffOnlyEmbed('Öncelik değiştirme')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Öncelik değiştirme')], flags: MessageFlags.Ephemeral });
     }
     const next = nextPriority(ticket.priority);
     ticketsV2.setPriority(ticket.id, next);
@@ -636,14 +636,14 @@ export const ticketComponents = {
   'ticket:hold': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [inactiveEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [inactiveEmbed()], flags: MessageFlags.Ephemeral });
     }
     if (tierOf(interaction.member) < Tier.REHBER) {
-      return interaction.reply({ embeds: [staffOnlyEmbed('Bekletme')], ephemeral: true });
+      return interaction.reply({ embeds: [staffOnlyEmbed('Bekletme')], flags: MessageFlags.Ephemeral });
     }
     const target = ticket.status === 'pending' ? 'open' : 'pending';
     const tr = applyTransition(ticket, target);
-    if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error, 'Durum Değiştirilemedi')], ephemeral: true });
+    if (!tr.ok) return interaction.reply({ embeds: [errEmbed(tr.error, 'Durum Değiştirilemedi')], flags: MessageFlags.Ephemeral });
     ticketsV2.setStatus(ticket.id, target);
     addCase('ticket_status', ticket.user_id, interaction.user.id, null, `#${ticket.id} → ${target}`);
     const fresh = ticketsV2.get(ticket.id);
@@ -659,7 +659,7 @@ export const ticketComponents = {
   'ticket:close2': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], flags: MessageFlags.Ephemeral });
     }
     return startCloseConfirm(interaction, ticket);
   },
@@ -669,12 +669,12 @@ export const ticketComponents = {
   'ticket:closeok': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], flags: MessageFlags.Ephemeral });
     }
     if (!canClose(interaction, ticket)) {
       return interaction.reply({
         embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     const modal = new ModalBuilder()
@@ -696,12 +696,12 @@ export const ticketComponents = {
   'ticket:closemodal': async (interaction) => {
     const ticket = ticketFromId(interaction);
     if (!ticket || ticket.status === 'closed') {
-      return interaction.reply({ embeds: [alreadyClosedEmbed()], ephemeral: true });
+      return interaction.reply({ embeds: [alreadyClosedEmbed()], flags: MessageFlags.Ephemeral });
     }
     if (!canClose(interaction, ticket)) {
       return interaction.reply({
         embeds: [errEmbed('Bir talebi yalnızca onu açan kişi veya yetkililer kapatabilir.', 'Talep Kapatılamaz')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     const reason = interaction.fields.getTextInputValue('sebep').trim();
@@ -715,18 +715,18 @@ export const ticketComponents = {
     const ticket = Number.isInteger(id) ? ticketsV2.get(id) : null;
     if (!ticket || !(score >= 1 && score <= 5)) {
       return interaction.reply({
-        embeds: [neutralEmbed('Bu değerlendirme artık geçerli değil.', 'Değerlendirme Kapandı')], ephemeral: true,
+        embeds: [neutralEmbed('Bu değerlendirme artık geçerli değil.', 'Değerlendirme Kapandı')], flags: MessageFlags.Ephemeral,
       });
     }
     if (ticket.user_id !== interaction.user.id) {
       return interaction.reply({
         embeds: [errEmbed('Bu değerlendirme başka bir kullanıcının talebine ait.', 'Bu Buton Sana Ait Değil')],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     if (!ticketsV2.rate(id, score)) {
       return interaction.reply({
-        embeds: [neutralEmbed('Bu talebi zaten puanlamıştın. Teşekkürler!', 'Değerlendirme Alınmış')], ephemeral: true,
+        embeds: [neutralEmbed('Bu talebi zaten puanlamıştın. Teşekkürler!', 'Değerlendirme Alınmış')], flags: MessageFlags.Ephemeral,
       });
     }
     addCase('ticket_rate', ticket.user_id, ticket.user_id, null, `#${id} → ${score}/5`);
@@ -744,7 +744,7 @@ export const ticketComponents = {
         '⭐ Değerlendirmen Kaydedildi')],
       components: [],
     }).catch(() => interaction.reply({
-      embeds: [okEmbed(`Puanın kaydedildi: **${score}/5**`, '⭐ Değerlendirmen Kaydedildi')], ephemeral: true,
+      embeds: [okEmbed(`Puanın kaydedildi: **${score}/5**`, '⭐ Değerlendirmen Kaydedildi')], flags: MessageFlags.Ephemeral,
     }));
   },
 };

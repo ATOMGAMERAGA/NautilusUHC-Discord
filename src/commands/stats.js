@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  MessageFlags,
 } from 'discord.js';
 import { Tier } from '../permissions.js';
 import {
@@ -189,7 +190,7 @@ export default [
     async execute(interaction) {
       const user = interaction.options.getUser('kullanıcı', true);
       const payload = sicilPayload(user.id, user.tag, 0);
-      return interaction.reply({ ...payload, ephemeral: true });
+      return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     },
   },
 ];
