@@ -6,10 +6,11 @@ import assert from 'node:assert/strict';
  *
  * Sahadaki arıza: oyuncu MC'de `/link` ile 6 karakterlik kodu alıyor, Discord
  * modalına DOĞRU kodu giriyor, bot yine de "Kod geçersiz veya süresi dolmuş"
- * diyordu. Kök neden, bot'un HTTP 400/404 gördüğü her yanıtı "yanlış kod"
- * saymasıydı: isteğin plugin'e hiç ulaşmadığı durumlar (yanlış MC_API_URL,
- * botun kendi ucuna döngü, eksik alan, yetki hatası) da oyuncuya kod hatası
- * gibi gösteriliyordu.
+ * diyordu. Önceki ana nedenlerden biri bot'un HTTP 400/404 gördüğü her yanıtı
+ * "yanlış kod" saymasıydı. Kalan yarış ise birden fazla plugin bağlıyken
+ * isteğin kodu üretmeyen instance'a gitmesiydi. Bu paket, yanlış uç/ayar
+ * hatalarının kod hatasına çevrilmemesini ve instance'ların hedefli denenmesini
+ * kilitler. Plugin restart kalıcılığı ayrıca plugin-patch testindedir.
  *
  * Buradaki testler akışın TAMAMINI (köprü durumu → linkStatus → linkVerify →
  * sınıflandırma) sürer; Discord'a hiç ihtiyaç duymaz.
@@ -238,11 +239,18 @@ test('MC_API_URL geçersizken doğrulama sahte "kod geçersiz" değil ayar hatas
 /* 4. Birden fazla plugin instance                                      */
 /* ------------------------------------------------------------------ */
 
-test('iki aktif poller → rastgele yönlendirme yapılmadan belirgin hata', async () => {
+test('kod ikinci açık instance\'taysa hedefli doğrulama orada devam eder', async () => {
   const logger = captureLogger();
   const queue = fakeQueue({
-    instances: ['mc-canli', 'mc-test'],
-    respond: () => assert.fail('belirsiz instance varken iş kuyruğa YAZILMAMALI'),
+    instances: ['mc-eski', 'mc-canli'],
+    respond: (job) => {
+      if (job.path.startsWith('/api/link/status')) {
+        return { status: 200, data: { linked: false } };
+      }
+      return job.targetInstance === 'mc-canli'
+        ? { status: 200, data: { mc: 'Oyuncu1' } }
+        : { status: 404, data: { error: 'invalid_code' } };
+    },
   });
   const cfg = {
     mcApiUrl: '', directFallbackDisabled: false, mcApiUrlError: null, bridgeSecret: SECRET,
@@ -250,14 +258,52 @@ test('iki aktif poller → rastgele yönlendirme yapılmadan belirgin hata', asy
   const api = createMcApi({ queue, cfg, logger });
 
   const d = await verifyLinkCode({ api, code: CODE, discordId: '1', discordTag: 't', logger });
+  assert.equal(d.outcome, 'linked');
+  assert.equal(d.mc, 'Oyuncu1');
+  assert.deepEqual(
+    queue.jobs.filter((job) => job.path === '/api/link/verify').map((job) => job.targetInstance),
+    ['mc-eski', 'mc-canli'],
+    'kod her instance\'a ayrı ve hedefli gönderilmeli',
+  );
+});
+
+test('tüm açık instance\'lar açıkça reddederse ancak o zaman kod geçersizdir', async () => {
+  const { api, queue, logger } = apiWith(
+    { status: 404, data: { error: 'invalid_code' } },
+    { instances: ['mc-1', 'mc-2'] },
+  );
+  const d = await run(api, logger);
   assert.equal(d.outcome, 'failed');
-  assert.equal(d.failure.kind, 'ambiguous_plugin_instance');
-  assert.equal(d.failure.errorCode, 'multiple_plugin_instances');
-  assert.equal(queue.jobs.length, 0, 'hiçbir iş rastgele bir instance\'a gönderilmemeli');
-  // Logda çözüm yolu yazmalı.
-  const logs = logger.lines.join('\n');
-  assert.match(logs, /multiple_plugin_instances/);
-  assert.match(logs, /BRIDGE_INSTANCE_ID/);
+  assert.equal(d.failure.kind, 'bad_code');
+  assert.deepEqual(
+    queue.jobs.filter((job) => job.path === '/api/link/verify').map((job) => job.targetInstance),
+    ['mc-1', 'mc-2'],
+  );
+});
+
+test('bir instance yanıt vermezse diğerinin invalid yanıtı kesin kod hatası sayılmaz', async () => {
+  const logger = captureLogger();
+  const queue = fakeQueue({
+    instances: ['mc-yanitsiz', 'mc-diger'],
+    respond: (job) => {
+      if (job.targetInstance === 'mc-yanitsiz') {
+        throw new Error('Minecraft sunucusuna ulaşılamadı');
+      }
+      return { status: 404, data: { error: 'invalid_code' } };
+    },
+  });
+  const cfg = {
+    mcApiUrl: '', directFallbackDisabled: false, mcApiUrlError: null, bridgeSecret: SECRET,
+  };
+  const api = createMcApi({ queue, cfg, logger });
+
+  const d = await run(api, logger);
+  assert.equal(d.outcome, 'failed');
+  assert.equal(d.failure.kind, 'unreachable');
+  assert.deepEqual(
+    queue.jobs.filter((job) => job.path === '/api/link/verify').map((job) => job.targetInstance),
+    ['mc-yanitsiz', 'mc-diger'],
+  );
 });
 
 test('iki instance yalnız yan etkili çağrıları bloklar; okuma çağrıları çalışır', async () => {
@@ -308,25 +354,26 @@ test('ters vekil arkasında tek kimlik + iki eşzamanlı yoklama da bloklanır',
   assert.match(logger.lines.join('\n'), /uzun-yoklama/, 'gerekçe logda açıkça yazmalı');
 });
 
-test('sorgu ve doğrulama farklı yoklamalara düşerse log bunu açıkça söyler', async () => {
+test('aynı instance\'ın ardışık farklı pollId\'leri çoklu plugin alarmı üretmez', async () => {
   const logger = captureLogger();
-  // Belirsizlik tespit edilemeyecek kadar geç ortaya çıkmış varsayalım: iki
-  // istek farklı pollId'lere düşmüş ve plugin invalid_code demiş.
+  // Tek plugin her uzun-yoklamada yeni pollId alır; süreç kimliği aynı kaldığı
+  // sürece bu normaldir ve önceki teşhisteki gibi çoklu plugin sayılamaz.
   const api = {
-    bridgeStatus: () => ({ ok: true, transport: 'reverse', instances: ['ip:172.18.0.1'] }),
-    bridgeSnapshot: () => ({ pollers: 2, peakPollers: 2, instances: 1 }),
-    linkStatus: async () => ({ ok: true, linked: false, pollId: 'aaaa1111' }),
+    bridgeStatus: () => ({ ok: true, transport: 'reverse', instances: ['mc-canli'], routing: {} }),
+    bridgeSnapshot: () => ({ pollers: 1, peakPollers: 1, instances: 1 }),
+    linkStatus: async () => ({
+      ok: true, linked: false, claimedBy: 'mc-canli', pollId: 'aaaa1111',
+    }),
     linkVerify: async () => ({
-      ok: false, status: 404, errorCode: 'invalid_code', pollId: 'bbbb2222', transport: 'reverse',
+      ok: false, status: 404, errorCode: 'invalid_code', claimedBy: 'mc-canli',
+      pollId: 'bbbb2222', transport: 'reverse',
     }),
   };
   const d = await verifyLinkCode({ api, code: CODE, discordId: '1', discordTag: 't', logger });
   assert.equal(d.failure.kind, 'bad_code');
   const logs = logger.lines.join('\n');
-  assert.match(logs, /FARKLI plugin yoklamalarına gitti/);
-  assert.match(logs, /aaaa1111/);
-  assert.match(logs, /bbbb2222/);
-  assert.match(logs, /pollers=2/, 'köprü anlık durumu da loglanmalı');
+  assert.doesNotMatch(logs, /FARKLI plugin/);
+  assert.match(logs, /pollers=1/, 'köprü anlık durumu yine loglanmalı');
 });
 
 /* ------------------------------------------------------------------ */
@@ -364,6 +411,8 @@ test('Discord hesabı zaten bağlıysa doğrulama isteği atılmaz', async () =>
   const d = await verifyLinkCode({ api, code: CODE, discordId: '1', discordTag: 't', logger });
   assert.equal(d.outcome, 'already_linked_self');
   assert.equal(d.mc, 'EskiOyuncu');
+  const statusJob = queue.jobs.find((j) => j.path.startsWith('/api/link/status'));
+  assert.equal(statusJob.targetInstance, 'mc-live', 'durum sorgusu da aynı instance\'a hedeflenmeli');
   assert.equal(queue.jobs.filter((j) => j.path === '/api/link/verify').length, 0);
 });
 

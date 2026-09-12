@@ -128,6 +128,15 @@ test('kuyruk: iki farklı instance yoklarsa ikisi de görülür', async () => {
   assert.equal(q.stats().instances, 2, 'belirsizlik tespit edilebilmeli');
 });
 
+test('kuyruk: hedef denemeleri en son görülen instance ile başlar', async () => {
+  let clock = 1_000_000;
+  const q = createBridgeQueue({ now: () => clock });
+  await q.takeJobs(0, { instanceId: 'mc-eski' });
+  clock += 100;
+  await q.takeJobs(0, { instanceId: 'mc-guncel' });
+  assert.deepEqual(q.activeInstances(), ['mc-guncel', 'mc-eski']);
+});
+
 test('kuyruk: instance kaydı bağlantı penceresi dışında düşer', async () => {
   let clock = 1_000_000;
   const q = createBridgeQueue({ now: () => clock });

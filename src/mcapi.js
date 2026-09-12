@@ -150,8 +150,9 @@ export function createMcApi({
     correlationId, transport, method, path, status, errorCode, startedAt, claimedBy, pollId,
   }) {
     const ms = now() - startedAt;
-    // İşi hangi plugin yoklaması aldığı teşhis için kritiktir: aynı akışın iki
-    // isteği farklı pollId'lere düşüyorsa köprüde birden fazla plugin vardır.
+    // claimedBy süreç kimliğidir; pollId ise her uzun-yoklamada doğal olarak
+    // değişir. İkisini logları ilişkilendirmek için taşıyoruz fakat çoklu
+    // plugin kararı yalnız claimedBy/instance sinyaliyle verilebilir.
     const who = [
       claimedBy ? `inst=${claimedBy}` : null,
       pollId ? `poll=${pollId}` : null,
@@ -164,10 +165,11 @@ export function createMcApi({
 
   /**
    * @param {string} path
-   * @param {{method?:string, body?:object, requireSingleInstance?:boolean, timeoutMs?:number}} [opts]
+   * @param {{method?:string, body?:object, requireSingleInstance?:boolean, targetInstance?:string|null, timeoutMs?:number}} [opts]
    */
   async function request(path, {
-    method = 'GET', body, requireSingleInstance = false, timeoutMs = TIMEOUT_MS,
+    method = 'GET', body, requireSingleInstance = false, targetInstance = null,
+    timeoutMs = TIMEOUT_MS,
   } = {}) {
     const correlationId = newId();
     const startedAt = now();
@@ -187,10 +189,11 @@ export function createMcApi({
 
     /* 1) Ters köprü — plugin aktif olarak yokluyorsa her zaman bunu tercih et. */
     if (status.transport === 'reverse') {
-      const targetInstance = requireSingleInstance ? targetableInstance(status.instances) : null;
+      const queueTarget = targetInstance
+        ?? (requireSingleInstance ? targetableInstance(status.instances) : null);
       try {
         const res = await queue.enqueue({
-          method, path, body: body ?? null, targetInstance,
+          method, path, body: body ?? null, targetInstance: queueTarget,
         }, timeoutMs);
         const shaped = shape(res.status, res.data, {
           transport: 'reverse', correlationId, claimedBy: res.claimedBy, pollId: res.claimedPollId,
@@ -286,13 +289,17 @@ export function createMcApi({
     status: () => request('/api/status'),
 
     /* Account linking — the plugin is the source of truth. */
-    linkVerify: (code, discordId, discordTag) => request('/api/link/verify', {
+    linkVerify: (code, discordId, discordTag, { targetInstance = null } = {}) => request('/api/link/verify', {
       method: 'POST',
       body: { code, discordId, discordTag },
-      // Yan etkili: belirsiz instance'a asla gönderilmez.
-      requireSingleInstance: true,
+      // Hedef verildiyse birden fazla instance güvenlidir; hedef yoksa eski
+      // koruma sürer ve yan etkili çağrı rastgele poller'a gitmez.
+      requireSingleInstance: !targetInstance,
+      targetInstance,
     }),
-    linkStatus: (query) => request(`/api/link/status?${query}`),
+    linkStatus: (query, { targetInstance = null } = {}) => request(`/api/link/status?${query}`, {
+      targetInstance,
+    }),
     linkDelete: (type, value) => request('/api/link', {
       method: 'DELETE', body: { type, value }, requireSingleInstance: true,
     }),
