@@ -235,15 +235,24 @@ gösterilir. HTTP 400/404 tek başına kod hatası sayılmaz; `not_found`,
 hatası olarak anlatılır. Doğrulamanın tek doğruluk kaynağı plugin'dir — bot
 kod üretmez, saklamaz.
 
-Aynı `BRIDGE_SECRET` ile birden fazla plugin bağlanırsa doğrulama rastgele bir
-sunucuya gönderilmez: bot `multiple_plugin_instances` hatası verir. Bu önemlidir,
-çünkü bağlama kodları **plugin'in belleğinde** yaşar — kodu üreten sunucu ile
-doğrulayan sunucu farklı olursa doğru kod zorunlu olarak reddedilir.
+Aynı `BRIDGE_SECRET` ile birden fazla, açık kimlikli plugin bağlanırsa bot kodu
+rastgele bir sunucuya göndermez. En son görülen instance'tan başlayarak her
+sunucuya ayrı ve hedefli doğrulama yapar; ancak bütün sunucular açıkça
+`invalid_code` / `expired_code` döndürürse kullanıcıya kod hatası gösterir.
+Instance kimliği aynı veya anonim kaldığı için güvenli hedefleme yapılamıyorsa
+bot `multiple_plugin_instances` hatası verir.
+
+`NautilusUHC-1.1.1-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
+oyuncu bilgisi ve son kullanma zamanı
+`plugins/NautilusUHC/pending-link-codes.dat` dosyasına atomik yazılır. Böylece
+plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz; başarılı
+doğrulamadan sonra kayıt silinir ve kod tek kullanımlık kalır.
 
 Belirsizlik iki bağımsız sinyalle yakalanır:
 
 1. **Farklı instance kimlikleri** — plugin `bridge.instance-id` değerini her
-   yoklamada `X-Bridge-Instance` başlığıyla gönderir.
+   yoklamada `X-Bridge-Instance` başlığıyla gönderir. Birden fazla açık ve
+   farklı kimlik güvenle hedeflenebilir.
 2. **Eşzamanlı uzun-yoklama sayısı** — sağlıklı tek plugin aynı anda yalnız bir
    yoklama tutar, dolayısıyla ikinci bir açık yoklama ikinci bir süreç demektir.
    Bu sinyal kimlikten ve IP'den bağımsızdır: ters vekil (Dokploy/Traefik)

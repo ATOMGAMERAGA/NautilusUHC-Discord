@@ -53,10 +53,9 @@ import { randomUUID } from 'node:crypto';
  * aynı anda iki açık yoklama = iki ayrı plugin süreci. Bu sayaç IP'den, ters
  * vekilden ve plugin sürümünden bağımsız çalışır.
  *
- * Bu KRİTİKTİR: iki yoklama bekliyorken arka arkaya gelen iki iş (linkStatus +
- * linkVerify) FARKLI pluginlere dağılır. Kodu üreten sunucu sorguyu, üretmeyen
- * sunucu doğrulamayı alır ve oyuncu doğru kodu girdiği hâlde HER SEFERİNDE
- * "invalid_code" görür.
+ * Bu KRİTİKTİR: kimliği açık pluginler hedefli iş alır. Aynı veya anonim
+ * kimliğin arkasındaki eşzamanlı poller'lar ise güvenle hedeflenemediği için
+ * hesap bağlama akışı açık bir kurulum hatasıyla durur.
  */
 
 /** Bir işin sonucu için beklenecek varsayılan süre (ms). */
@@ -107,7 +106,12 @@ export function createBridgeQueue({ now = Date.now } = {}) {
    */
   function activeInstances() {
     pruneInstances();
-    return [...instances.keys()];
+    // Bir deploy/restart sırasında eski instance kimliği pencere boyunca
+    // listede kalabilir. Hedefli denemeler önce gerçekten güncel poller'a
+    // gitsin; aksi hâlde eski kimlikte 8 sn zaman aşımı yaşanır.
+    return [...instances.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([id]) => id);
   }
 
   /**
@@ -253,8 +257,8 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     entry.resolve({
       status: Number(status) || 0,
       data: data ?? {},
-      // Teşhis: işi hangi plugin yoklaması aldı. Aynı akışın iki isteği farklı
-      // pollId'lere düşüyorsa köprüde birden fazla plugin var demektir.
+      // Teşhis: işi hangi instance ve hangi yoklama aldı. pollId her ardışık
+      // uzun-yoklamada değişir; süreç karşılaştırması claimedBy ile yapılır.
       claimedBy: entry.claimedBy,
       claimedPollId: entry.claimedPollId,
     });

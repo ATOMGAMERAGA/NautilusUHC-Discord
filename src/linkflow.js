@@ -175,10 +175,10 @@ export function classifyLinkFailure(res = {}) {
  *
  * Sıra:
  *   1. Kodu normalize et (trim + upper).
- *   2. Köprü durumunu kontrol et — plugin bağlı değilse HİÇBİR istek atma,
- *      doğrudan anlaşılır köprü hatası dön (sahte "kod geçersiz" üretilmez).
- *   3. Mevcut bağlantıyı sor (bu Discord hesabı zaten bağlı mı?).
- *   4. Kodu plugin'e doğrulat ve sonucu sınıflandır.
+ *   2. Köprü durumunu ve hedeflenebilir instance'ları belirle.
+ *   3. Tek instance'ta mevcut bağlantıyı sor.
+ *   4. Kodu her açık instance'a AYRI HEDEFLİ istekle doğrulat. Ancak hepsi
+ *      açıkça invalid/expired derse kullanıcıya kod hatası göster.
  *
  * @returns {Promise<{outcome:'linked'|'already_linked_self'|'failed', mc?:string, failure?:object, correlationId?:string}>}
  */
@@ -188,39 +188,91 @@ export async function verifyLinkCode({
   const normalized = normalizeLinkCode(code);
 
   // 2) Köprü kapalıyken doğrulama çağrısı YAPILMAZ.
-  const bridge = api.bridgeStatus({ requireSingleInstance: true });
+  const bridge = api.bridgeStatus({ requireSingleInstance: false });
   if (!bridge.ok) {
     logger.warn(`[link] doğrulama gönderilmedi: ${bridge.errorCode} — ${bridge.error}`);
     return { outcome: 'failed', failure: classifyLinkFailure(bridge) };
   }
 
-  // 3) Zaten bağlı mı? (Mevcut davranış korunuyor.)
-  const status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`);
-  if (status.ok && status.linked) {
-    return { outcome: 'already_linked_self', mc: status.mc, correlationId: status.correlationId };
+  const plan = verificationTargets(bridge);
+  if (!plan.ok) {
+    logger.warn(`[link] doğrulama gönderilmedi: ${plan.errorCode} — ${plan.error}`);
+    return { outcome: 'failed', failure: classifyLinkFailure(plan) };
   }
 
-  // 4) Asıl doğrulama — plugin tek doğruluk kaynağıdır.
-  const res = await api.linkVerify(normalized, discordId, discordTag);
-  if (res.ok) {
-    return { outcome: 'linked', mc: res.mc, correlationId: res.correlationId };
+  // Tek hedefte mevcut "zaten bağlı" davranışını koru. Birden fazla hedefte
+  // gereksiz N adet ön sorgu yerine atomik verify yanıtındaki 409 kullanılır.
+  let status = null;
+  if (plan.targets.length === 1) {
+    const targetInstance = plan.targets[0];
+    status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance });
+    if (status.ok && status.linked) {
+      return { outcome: 'already_linked_self', mc: status.mc, correlationId: status.correlationId };
+    }
   }
-  const failure = classifyLinkFailure(res);
+
+  // 4) Instance kimlikleri açık olduğunda yanlış sunucudaki invalid_code son
+  // karar değildir. Her hedef ayrı denenir; başarı ilk bulunduğu yerde biter.
+  let lastBadCode = null;
+  let firstInfrastructureFailure = null;
+  for (const targetInstance of plan.targets) {
+    const res = await api.linkVerify(normalized, discordId, discordTag, { targetInstance });
+    if (res.ok) {
+      return { outcome: 'linked', mc: res.mc, correlationId: res.correlationId };
+    }
+    const failure = classifyLinkFailure(res);
+    if (failure.kind === 'already_linked_other') {
+      return { outcome: 'failed', failure, correlationId: res.correlationId };
+    }
+    if (failure.kind === 'bad_code') lastBadCode = { failure, res };
+    else if (!firstInfrastructureFailure) firstInfrastructureFailure = { failure, res };
+  }
+
+  // Bir hedef timeout/route/auth hatası verdiyse "tüm instance'lar kodu açıkça
+  // reddetti" diyemeyiz. Sahte invalid_code yerine o altyapı hatasını göster.
+  const final = firstInfrastructureFailure ?? lastBadCode;
+  const failure = final?.failure ?? classifyLinkFailure({});
+  const res = final?.res ?? {};
   logger.warn(`[link] doğrulama başarısız (${failure.kind}/${failure.errorCode})`
     + ` status=${res.status ?? '-'} transport=${res.transport ?? '-'} cid=${res.correlationId ?? '-'}`
-    + ` ${bridgeSnapshot(api)}`);
+    + ` targets=${plan.targets.length} ${bridgeSnapshot(api)}`);
 
-  // Aynı akışın iki isteği FARKLI plugin yoklamalarına düştüyse, kodu üreten
-  // sunucu ile doğrulayan sunucu farklı demektir: "invalid_code" o zaman kodun
-  // değil kurulumun hatasıdır. Bu satır teşhisi tek bakışta bitirir.
-  if (failure.kind === 'bad_code' && status.pollId && res.pollId && status.pollId !== res.pollId) {
-    logger.error('[link] DİKKAT: sorgu ve doğrulama FARKLI plugin yoklamalarına gitti'
-      + ` (${status.pollId} ≠ ${res.pollId}). Köprüye birden fazla Minecraft sunucusu bağlıysa`
+  // pollId her ardışık uzun-yoklamada değişir; süreç karşılaştırması claimedBy
+  // ile yapılır. Yalnız süreç kimliği gerçekten farklıysa teşhis alarmı ver.
+  if (failure.kind === 'bad_code' && status?.claimedBy && res.claimedBy
+      && status.claimedBy !== res.claimedBy) {
+    logger.error('[link] DİKKAT: sorgu ve doğrulama FARKLI plugin instance\'larına gitti'
+      + ` (${status.claimedBy} ≠ ${res.claimedBy}). Köprüye birden fazla Minecraft sunucusu bağlıysa`
       + ' kodu üretmeyen sunucu doğrulamayı reddeder ve oyuncu doğru kodu girdiği hâlde'
       + ' "kod geçersiz" görür. Fazladan sunucuyu/konteyneri kapat ya da her instance\'a'
       + ' ayrı BRIDGE_INSTANCE_ID ver.');
   }
   return { outcome: 'failed', failure, correlationId: res.correlationId };
+}
+
+/**
+ * Reverse bridge hedef planı. Yeni pluginler süreç başına açık bir instance
+ * kimliği gönderir; birden fazlaysa hepsini ayrı ayrı güvenle deneyebiliriz.
+ * Aynı/anonim kimliğin arkasında iki eşzamanlı poller varsa hedef seçilemez.
+ */
+function verificationTargets(bridge) {
+  if (bridge.transport !== 'reverse') return { ok: true, targets: [null] };
+
+  const instances = [...new Set(bridge.instances ?? [])];
+  const explicit = instances.filter((id) => id && !id.startsWith('ip:'));
+  const hasAnonymous = explicit.length !== instances.length;
+  const duplicateIdentity = bridge.routing?.reason === 'concurrent_pollers';
+  if (duplicateIdentity || (hasAnonymous && instances.length > 1)) {
+    return {
+      ok: false,
+      transport: 'reverse',
+      errorCode: 'multiple_plugin_instances',
+      error: 'Birden fazla uzun-yoklama aynı/anonim kimlikle bağlı; doğrulama güvenle hedeflenemiyor. '
+        + 'Her Minecraft sunucusunda farklı bridge.instance-id kullan.',
+    };
+  }
+
+  return { ok: true, targets: explicit.length ? explicit : [null] };
 }
 
 /** Hata anındaki köprü durumunu tek satıra sıkıştırır (secret/kod içermez). */
