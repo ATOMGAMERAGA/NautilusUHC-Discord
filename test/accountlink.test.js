@@ -36,12 +36,19 @@ function captureLogger() {
  * Ters köprü kuyruğu taklidi. `respond(job)` işi plugin gibi yanıtlar;
  * alınan işler `jobs` dizisinde birikir (hiç istek atılmadığını da kanıtlar).
  */
-function fakeQueue({ connected = true, instances = ['mc-live'], respond } = {}) {
+function fakeQueue({
+  connected = true, instances = ['mc-live'], pollers = 1, respond,
+} = {}) {
   const jobs = [];
   return {
     jobs,
     pluginConnected: () => connected,
     activeInstances: () => instances,
+    routingAmbiguity: () => {
+      const reason = instances.length > 1 ? 'instances' : (pollers > 1 ? 'concurrent_pollers' : null);
+      return { ambiguous: reason !== null, reason, instances, pollers, peakPollers: pollers };
+    },
+    stats: () => ({ pollers, peakPollers: pollers, instances: instances.length }),
     enqueue: async (job) => {
       jobs.push(job);
       return respond(job);
@@ -280,6 +287,46 @@ test('eski (kimliksiz) plugin hedefsiz iş alır — geriye uyumluluk', async ()
   const { api, queue } = apiWith({ status: 200, data: { mc: 'Oyuncu1' } }, { instances: ['ip:10.0.0.9'] });
   await api.linkVerify(CODE, '1', 't');
   assert.equal(queue.jobs.at(-1).targetInstance, null, 'eski plugin hedefli iş anlamaz');
+});
+
+test('ters vekil arkasında tek kimlik + iki eşzamanlı yoklama da bloklanır', async () => {
+  // Sahadaki gerçek durum: iki plugin Dokploy proxy'sinin arkasında, ikisi de
+  // 'ip:172.18.0.1' görünüyor. Kimlik sayımı 1 der; eşzamanlı yoklama sayısı
+  // belirsizliği yine de yakalamalı, yoksa doğrulama rastgele sunucuya gider.
+  const logger = captureLogger();
+  const queue = fakeQueue({
+    instances: ['ip:172.18.0.1'],
+    pollers: 2,
+    respond: () => assert.fail('belirsizlik varken iş kuyruğa YAZILMAMALI'),
+  });
+  const cfg = { mcApiUrl: '', directFallbackDisabled: false, mcApiUrlError: null, bridgeSecret: SECRET };
+  const api = createMcApi({ queue, cfg, logger });
+
+  const d = await verifyLinkCode({ api, code: CODE, discordId: '1', discordTag: 't', logger });
+  assert.equal(d.failure.kind, 'ambiguous_plugin_instance');
+  assert.equal(queue.jobs.length, 0);
+  assert.match(logger.lines.join('\n'), /uzun-yoklama/, 'gerekçe logda açıkça yazmalı');
+});
+
+test('sorgu ve doğrulama farklı yoklamalara düşerse log bunu açıkça söyler', async () => {
+  const logger = captureLogger();
+  // Belirsizlik tespit edilemeyecek kadar geç ortaya çıkmış varsayalım: iki
+  // istek farklı pollId'lere düşmüş ve plugin invalid_code demiş.
+  const api = {
+    bridgeStatus: () => ({ ok: true, transport: 'reverse', instances: ['ip:172.18.0.1'] }),
+    bridgeSnapshot: () => ({ pollers: 2, peakPollers: 2, instances: 1 }),
+    linkStatus: async () => ({ ok: true, linked: false, pollId: 'aaaa1111' }),
+    linkVerify: async () => ({
+      ok: false, status: 404, errorCode: 'invalid_code', pollId: 'bbbb2222', transport: 'reverse',
+    }),
+  };
+  const d = await verifyLinkCode({ api, code: CODE, discordId: '1', discordTag: 't', logger });
+  assert.equal(d.failure.kind, 'bad_code');
+  const logs = logger.lines.join('\n');
+  assert.match(logs, /FARKLI plugin yoklamalarına gitti/);
+  assert.match(logs, /aaaa1111/);
+  assert.match(logs, /bbbb2222/);
+  assert.match(logs, /pollers=2/, 'köprü anlık durumu da loglanmalı');
 });
 
 /* ------------------------------------------------------------------ */

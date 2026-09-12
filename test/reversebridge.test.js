@@ -124,7 +124,11 @@ test('uçtan uca: bot isteği plugin tarafından yanıtlanır', async () => {
   assert.equal(done.status, 200);
   assert.deepEqual(await done.json(), { ok: true, unknown: false });
 
-  assert.deepEqual(await pending, { status: 200, data: { online: 12 } });
+  const settled = await pending;
+  assert.equal(settled.status, 200);
+  assert.deepEqual(settled.data, { online: 12 });
+  // İşi hangi yoklamanın aldığı teşhis için sonuca iliştirilir.
+  assert.ok(settled.claimedPollId, 'işi alan yoklamanın kimliği taşınmalı');
 });
 
 test('uçtan uca: POST gövdesi plugin’e aktarılır', async () => {

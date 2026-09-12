@@ -150,7 +150,15 @@ function rateLimited(ip, { limit = 60, windowMs = 60_000, now = Date.now(), buck
 export function pollInstanceId(req, url, ip) {
   const raw = req.headers['x-bridge-instance'] ?? url.searchParams.get('instance') ?? '';
   const id = String(raw).trim().slice(0, 64);
-  return id ? id : `${ANONYMOUS_INSTANCE_PREFIX}${ip}`;
+  if (id) return id;
+  // Ters vekil (Dokploy/Traefik/Cloudflare) arkasında req.socket.remoteAddress
+  // HER plugin için aynı proxy IP'sidir; iki ayrı sunucu tek kimlik gibi
+  // görünür. İletilen istemci IP'si onları yine de ayırır. Bu değer istemci
+  // kontrolündedir, dolayısıyla YALNIZ teşhis/yönlendirme içindir — kimlik
+  // doğrulaması değildir (o HMAC/paylaşılan sır işidir) ve belirsizlik tespiti
+  // buna tek başına güvenmez (bkz. bridgequeue.js eşzamanlı yoklama sayacı).
+  const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return `${ANONYMOUS_INSTANCE_PREFIX}${(forwarded || ip).slice(0, 64)}`;
 }
 
 /** Public stats uçlarının kökü — site bu yolu okur, kimlik doğrulaması YOKTUR. */

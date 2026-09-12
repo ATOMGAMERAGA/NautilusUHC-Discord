@@ -41,6 +41,22 @@ import { randomUUID } from 'node:crypto';
  * `enqueue({ targetInstance })` verilen iş yalnız o instance'a teslim edilir.
  * Eski pluginler hiç açık kimlik göndermediği için onlara ASLA hedefli iş
  * yazılmaz — protokol geriye uyumludur.
+ *
+ * KİMLİKTEN BAĞIMSIZ İKİNCİ SİNYAL: EŞZAMANLI YOKLAMA SAYISI
+ * ----------------------------------------------------------
+ * Ters vekil (Dokploy/Traefik/Cloudflare) arkasında HER plugin aynı proxy
+ * IP'sinden gelir; kimlik başlığı göndermeyen iki ayrı sunucu bu yüzden TEK
+ * anonim instance gibi görünür — kimlik sayımı orada kördür.
+ *
+ * Ama taşıma katmanı yalan söylemez: sağlıklı BİR plugin aynı anda YALNIZ BİR
+ * uzun-yoklama tutar (BridgePoller tek thread'de senkron döngüdür). Dolayısıyla
+ * aynı anda iki açık yoklama = iki ayrı plugin süreci. Bu sayaç IP'den, ters
+ * vekilden ve plugin sürümünden bağımsız çalışır.
+ *
+ * Bu KRİTİKTİR: iki yoklama bekliyorken arka arkaya gelen iki iş (linkStatus +
+ * linkVerify) FARKLI pluginlere dağılır. Kodu üreten sunucu sorguyu, üretmeyen
+ * sunucu doğrulamayı alır ve oyuncu doğru kodu girdiği hâlde HER SEFERİNDE
+ * "invalid_code" görür.
  */
 
 /** Bir işin sonucu için beklenecek varsayılan süre (ms). */
@@ -74,6 +90,9 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   const instances = new Map();
 
   let lastPollAt = 0;
+  /** Aynı anda en fazla kaç yoklama açıktı ve bu en son ne zaman görüldü. */
+  let peakPollers = 0;
+  let multiPollerSeenAt = 0;
 
   /** Pencere dışına düşmüş instance kayıtlarını atar. */
   function pruneInstances(at = now()) {
@@ -91,12 +110,23 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     return [...instances.keys()];
   }
 
-  /** Verilen instance'ın alabileceği işleri kuyruktan çeker. */
-  function claimJobs(instanceId) {
+  /**
+   * Verilen instance'ın alabileceği işleri kuyruktan çeker. İşi KİMİN aldığı
+   * bekleyen kayda yazılır: sonuç döndüğünde teşhis logu hangi plugin'in
+   * yanıtladığını söyleyebilsin diye.
+   */
+  function claimJobs(instanceId, pollId) {
     const taken = [];
     for (let i = 0; i < pending.length;) {
       const job = pending[i];
       if (!job.targetInstance || job.targetInstance === instanceId) {
+        const entry = waiting.get(job.jobId);
+        if (entry) {
+          entry.claimedBy = instanceId;
+          entry.claimedPollId = pollId;
+        }
+        // targetInstance kuyruk içi yönlendirme alanıdır; plugin'e giden
+        // gövdede kalması zararsızdır ama pollId asla dışarı sızmaz.
         taken.push(job);
         pending.splice(i, 1);
       } else {
@@ -110,7 +140,7 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   function flush() {
     for (let i = 0; i < pollers.length && pending.length > 0;) {
       const poller = pollers[i];
-      const jobs = claimJobs(poller.instanceId);
+      const jobs = claimJobs(poller.instanceId, poller.pollId);
       if (jobs.length === 0) {
         i++;
         continue;
@@ -146,7 +176,9 @@ export function createBridgeQueue({ now = Date.now } = {}) {
         if (idx >= 0) pending.splice(idx, 1);
         reject(new Error('Minecraft sunucusuna ulaşılamadı (zaman aşımı).'));
       }, timeoutMs);
-      waiting.set(jobId, { resolve, reject, timer });
+      waiting.set(jobId, {
+        resolve: (res) => resolve(res), reject, timer, claimedBy: null, claimedPollId: null,
+      });
       pending.push(job);
       flush();
     });
@@ -165,7 +197,8 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     instances.set(instanceId, at);
     pruneInstances(at);
 
-    const ready = claimJobs(instanceId);
+    const pollId = randomUUID().slice(0, 8);
+    const ready = claimJobs(instanceId, pollId);
     if (ready.length > 0) return Promise.resolve(ready);
 
     const hold = Math.max(0, Math.min(Number(waitMs) || 0, MAX_POLL_WAIT_MS));
@@ -173,6 +206,7 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     return new Promise((resolve) => {
       const entry = {
         instanceId,
+        pollId,
         deliver: (jobs) => {
           const idx = pollers.indexOf(entry);
           if (idx >= 0) pollers.splice(idx, 1);
@@ -183,6 +217,11 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       // bunun için ayakta kalmalıdır (aksi hâlde olay döngüsü boşalır).
       entry.timer = setTimeout(() => entry.deliver([]), hold);
       pollers.push(entry);
+      if (pollers.length > peakPollers) peakPollers = pollers.length;
+      // Sağlıklı tek plugin aynı anda tek yoklama tutar; ikincisi ayrı bir
+      // süreç demektir. Zamanı not ediyoruz ki sinyal, yoklamalar kapandıktan
+      // sonra da bağlantı penceresi boyunca geçerli kalsın.
+      if (pollers.length > 1) multiPollerSeenAt = at;
     });
   }
 
@@ -195,7 +234,14 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     if (!entry) return false;
     waiting.delete(jobId);
     clearTimeout(entry.timer);
-    entry.resolve({ status: Number(status) || 0, data: data ?? {} });
+    entry.resolve({
+      status: Number(status) || 0,
+      data: data ?? {},
+      // Teşhis: işi hangi plugin yoklaması aldı. Aynı akışın iki isteği farklı
+      // pollId'lere düşüyorsa köprüde birden fazla plugin var demektir.
+      claimedBy: entry.claimedBy,
+      claimedPollId: entry.claimedPollId,
+    });
     return true;
   }
 
@@ -204,9 +250,40 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     return lastPollAt > 0 && now() - lastPollAt < CONNECTED_WINDOW_MS;
   }
 
+  /**
+   * Köprüde işin HANGİ plugin'e gideceği belirsiz mi?
+   *
+   * İki bağımsız sinyal kullanılır; biri yeterlidir:
+   *   1. `instances` — farklı açık kimlik (BRIDGE_INSTANCE_ID) sayısı > 1.
+   *      Kesindir ama kimlik göndermeyen eski pluginlerde çalışmaz.
+   *   2. `concurrent_pollers` — aynı anda ikiden fazla açık uzun-yoklama.
+   *      Kimlikten ve IP'den bağımsızdır; ters vekil arkasında da çalışır.
+   *      Sağlıklı tek plugin aynı anda tek yoklama tutar.
+   *
+   * (2) yalnız "şu an" değil, bağlantı penceresi boyunca hatırlanır: ikinci
+   * plugin tam o anda iki yoklama arasında olabilir, belirsizlik yine de gerçektir.
+   *
+   * @returns {{ambiguous:boolean, reason:string|null, instances:string[], pollers:number, peakPollers:number}}
+   */
+  function routingAmbiguity() {
+    const active = activeInstances();
+    const multiPollerRecent = multiPollerSeenAt > 0
+      && now() - multiPollerSeenAt < CONNECTED_WINDOW_MS;
+    let reason = null;
+    if (active.length > 1) reason = 'instances';
+    else if (pollers.length > 1 || multiPollerRecent) reason = 'concurrent_pollers';
+    return {
+      ambiguous: reason !== null,
+      reason,
+      instances: active,
+      pollers: pollers.length,
+      peakPollers,
+    };
+  }
+
   /** Teşhis için (/sağlık, /admin köprü). */
   function stats() {
-    const active = activeInstances();
+    const ambiguity = routingAmbiguity();
     return {
       connected: pluginConnected(),
       lastPollAt: lastPollAt || null,
@@ -214,9 +291,13 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       waiting: waiting.size,
       /** Şu anda AÇIK tutulan uzun-yoklama sayısı. */
       pollers: pollers.length,
+      /** Aynı anda görülen en yüksek yoklama sayısı (1'den büyükse çoklu plugin). */
+      peakPollers,
       /** Son pencerede görülen farklı plugin instance sayısı. */
-      instances: active.length,
-      instanceIds: active,
+      instances: ambiguity.instances.length,
+      instanceIds: ambiguity.instances,
+      ambiguous: ambiguity.ambiguous,
+      ambiguityReason: ambiguity.reason,
     };
   }
 
@@ -235,10 +316,12 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     }
     instances.clear();
     lastPollAt = 0;
+    peakPollers = 0;
+    multiPollerSeenAt = 0;
   }
 
   return {
-    enqueue, takeJobs, completeJob, pluginConnected, activeInstances, stats, reset,
+    enqueue, takeJobs, completeJob, pluginConnected, activeInstances, routingAmbiguity, stats, reset,
   };
 }
 
