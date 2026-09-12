@@ -191,7 +191,9 @@ export function createBridgeQueue({ now = Date.now } = {}) {
    * @param {number} waitMs
    * @param {{instanceId?: string}} [opts] plugin kimliği (yoksa 'legacy')
    */
-  function takeJobs(waitMs = MAX_POLL_WAIT_MS, { instanceId = `${ANONYMOUS_INSTANCE_PREFIX}bilinmeyen` } = {}) {
+  function takeJobs(waitMs = MAX_POLL_WAIT_MS, {
+    instanceId = `${ANONYMOUS_INSTANCE_PREFIX}bilinmeyen`, signal = null,
+  } = {}) {
     const at = now();
     lastPollAt = at;
     instances.set(instanceId, at);
@@ -217,10 +219,24 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       // bunun için ayakta kalmalıdır (aksi hâlde olay döngüsü boşalır).
       entry.timer = setTimeout(() => entry.deliver([]), hold);
       pollers.push(entry);
-      if (pollers.length > peakPollers) peakPollers = pollers.length;
+
+      // Bağlantı koparsa yoklamayı HEMEN düş. Aksi hâlde plugin yeniden
+      // başladığında terk edilmiş yoklama 25 sn boyunca açık sayılır, "iki
+      // eşzamanlı yoklama" sanılır ve sağlıklı tek kurulumda hesap bağlama
+      // boş yere bloklanırdı.
+      if (signal) {
+        if (signal.aborted) {
+          entry.deliver([]);
+          return;
+        }
+        signal.addEventListener('abort', () => entry.deliver([]), { once: true });
+      }
+
       // Sağlıklı tek plugin aynı anda tek yoklama tutar; ikincisi ayrı bir
       // süreç demektir. Zamanı not ediyoruz ki sinyal, yoklamalar kapandıktan
-      // sonra da bağlantı penceresi boyunca geçerli kalsın.
+      // sonra da bağlantı penceresi boyunca geçerli kalsın. Sayım yalnız
+      // GERÇEKTEN açık olan yoklamalar üzerinden yapılır (bkz. abort).
+      if (pollers.length > peakPollers) peakPollers = pollers.length;
       if (pollers.length > 1) multiPollerSeenAt = at;
     });
   }

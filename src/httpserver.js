@@ -513,8 +513,17 @@ export function createRequestHandler(client, hooks = {}) {
         ? Math.min(asked, MAX_POLL_WAIT_MS)
         : MAX_POLL_WAIT_MS;
       const instanceId = pollInstanceId(req, url, ip);
-      return bridgeQueue.takeJobs(wait, { instanceId })
-        .then((jobs) => respond(200, { ok: true, jobs, instanceId }));
+      // Plugin yeniden başlar ya da ağ koparsa bağlantı kapanır; yoklamayı
+      // kuyruktan hemen düşürmek için iptal sinyali veriyoruz. Terk edilmiş
+      // yoklamaların açık sayılması "birden fazla plugin" yanlış pozitifine
+      // yol açardı (bkz. bridgequeue.js).
+      const aborter = new AbortController();
+      req.on('close', () => aborter.abort());
+      return bridgeQueue.takeJobs(wait, { instanceId, signal: aborter.signal })
+        .then((jobs) => {
+          if (aborter.signal.aborted) return undefined; // istemci gitti
+          return respond(200, { ok: true, jobs, instanceId });
+        });
     }
 
     if (path === '/api/bridge/jobs/result' && req.method === 'POST') {

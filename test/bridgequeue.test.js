@@ -258,6 +258,32 @@ test('kuyruk: arka arkaya iki iş, iki bekleyen yoklamaya BÖLÜNÜR (arızanın
   q.reset();
 });
 
+test('kuyruk: kopan bağlantının yoklaması hemen düşer (yanlış pozitif koruması)', async () => {
+  const q = createBridgeQueue();
+  const ac = new AbortController();
+  const terk = q.takeJobs(5000, { instanceId: 'ip:172.18.0.1', signal: ac.signal });
+  assert.equal(q.stats().pollers, 1);
+
+  // Plugin yeniden başladı: eski bağlantı koptu.
+  ac.abort();
+  assert.deepEqual(await terk, []);
+  assert.equal(q.stats().pollers, 0, 'terk edilen yoklama açık sayılmamalı');
+
+  // Yeni süreç yoklamaya başlar — bu TEK plugin'dir, belirsizlik olmamalı.
+  const yeni = q.takeJobs(120, { instanceId: 'ip:172.18.0.1' });
+  assert.equal(q.routingAmbiguity().ambiguous, false,
+    'yeniden başlatma "iki plugin" sanılmamalı — hesap bağlama boş yere bloklanmaz');
+  await yeni;
+});
+
+test('kuyruk: zaten iptal edilmiş sinyalle yoklama anında boş döner', async () => {
+  const q = createBridgeQueue();
+  const ac = new AbortController();
+  ac.abort();
+  assert.deepEqual(await q.takeJobs(5000, { instanceId: 'mc-1', signal: ac.signal }), []);
+  assert.equal(q.stats().pollers, 0);
+});
+
 /* ------------------------------------------------------------------ */
 /* Public stats proxy                                                  */
 /* ------------------------------------------------------------------ */
