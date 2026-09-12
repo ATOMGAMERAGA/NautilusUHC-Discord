@@ -84,8 +84,8 @@ export default [
             // Birden fazla instance = hesap bağlama isteğinin hangi sunucuya
             // gideceği belirsiz demektir; bu yüzden ayrıca gösterilir.
             name: 'Aktif poller',
-            value: `${queue.pollers} açık • ${queue.instances} instance`
-              + (queue.instances > 1 ? ' ⚠️' : ''),
+            value: `${queue.pollers} açık (tepe ${queue.peakPollers}) • ${queue.instances} instance`
+              + (queue.ambiguous ? ' ⚠️' : ''),
             inline: true,
           },
           { name: 'Bekleyen görev', value: String(pending), inline: true },
@@ -110,11 +110,16 @@ export default [
           inline: false,
         });
       }
-      if (queue.instances > 1) {
+      if (queue.ambiguous) {
+        const gerekce = queue.ambiguityReason === 'instances'
+          ? `**${queue.instances}** farklı \`BRIDGE_INSTANCE_ID\` görüldü`
+          : `aynı anda **${queue.peakPollers}** uzun-yoklama açıktı `
+            + '(sağlıklı tek plugin yalnız bir tane tutar)';
         embed.addFields({
           name: 'Uyarı — birden fazla plugin',
-          value: `Köprüye **${queue.instances}** plugin instance bağlı. Hesap bağlama doğrulaması `
-            + 'rastgele bir sunucuya gitmemesi için bu durumda BLOKLANIR.\n'
+          value: `Köprüye birden fazla Minecraft sunucusu bağlı görünüyor: ${gerekce}.\n`
+            + 'Kodu **üreten** sunucu ile **doğrulayan** sunucu farklı olursa oyuncu doğru kodu '
+            + 'girdiği hâlde "kod geçersiz" görür; bu yüzden hesap bağlama bu durumda BLOKLANIR.\n'
             + 'Fazladan Minecraft sunucusunu/konteynerini kapat ya da her instance\'a ayrı '
             + '`BRIDGE_INSTANCE_ID` ver ve yalnız birini bu bota bağla.',
           inline: false,

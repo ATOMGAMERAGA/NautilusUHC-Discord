@@ -207,6 +207,25 @@ export async function verifyLinkCode({
   }
   const failure = classifyLinkFailure(res);
   logger.warn(`[link] doğrulama başarısız (${failure.kind}/${failure.errorCode})`
-    + ` status=${res.status ?? '-'} transport=${res.transport ?? '-'} cid=${res.correlationId ?? '-'}`);
+    + ` status=${res.status ?? '-'} transport=${res.transport ?? '-'} cid=${res.correlationId ?? '-'}`
+    + ` ${bridgeSnapshot(api)}`);
+
+  // Aynı akışın iki isteği FARKLI plugin yoklamalarına düştüyse, kodu üreten
+  // sunucu ile doğrulayan sunucu farklı demektir: "invalid_code" o zaman kodun
+  // değil kurulumun hatasıdır. Bu satır teşhisi tek bakışta bitirir.
+  if (failure.kind === 'bad_code' && status.pollId && res.pollId && status.pollId !== res.pollId) {
+    logger.error('[link] DİKKAT: sorgu ve doğrulama FARKLI plugin yoklamalarına gitti'
+      + ` (${status.pollId} ≠ ${res.pollId}). Köprüye birden fazla Minecraft sunucusu bağlıysa`
+      + ' kodu üretmeyen sunucu doğrulamayı reddeder ve oyuncu doğru kodu girdiği hâlde'
+      + ' "kod geçersiz" görür. Fazladan sunucuyu/konteyneri kapat ya da her instance\'a'
+      + ' ayrı BRIDGE_INSTANCE_ID ver.');
+  }
   return { outcome: 'failed', failure, correlationId: res.correlationId };
+}
+
+/** Hata anındaki köprü durumunu tek satıra sıkıştırır (secret/kod içermez). */
+function bridgeSnapshot(api) {
+  const s = api.bridgeSnapshot?.();
+  if (!s) return '';
+  return `pollers=${s.pollers} peak=${s.peakPollers} instances=${s.instances}`;
 }

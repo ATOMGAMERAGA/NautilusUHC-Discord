@@ -186,6 +186,105 @@ test('kuyruk: stats() açık poller ve instance sayısını verir', async () => 
 });
 
 /* ------------------------------------------------------------------ */
+/* Ters vekil arkasındaki çoklu plugin (kimlik sayımının kör noktası)  */
+/* ------------------------------------------------------------------ */
+
+test('kuyruk: aynı IP\'den iki eşzamanlı yoklama belirsizlik sayılır', async () => {
+  const q = createBridgeQueue();
+  // Dokploy/Traefik arkasında İKİ plugin: ikisi de aynı proxy IP'sinden gelir,
+  // kimlik başlığı göndermezler → kimlik sayımı 1 der, yani KÖRDÜR.
+  const a = q.takeJobs(300, { instanceId: 'ip:172.18.0.1' });
+  const b = q.takeJobs(300, { instanceId: 'ip:172.18.0.1' });
+
+  assert.equal(q.activeInstances().length, 1, 'kimlik sayımı burada kör kalır');
+  const routing = q.routingAmbiguity();
+  assert.equal(routing.ambiguous, true, 'eşzamanlı yoklama sayısı belirsizliği yakalamalı');
+  assert.equal(routing.reason, 'concurrent_pollers');
+
+  await Promise.all([a, b]);
+});
+
+test('kuyruk: belirsizlik yoklamalar kapandıktan sonra da pencere boyunca hatırlanır', async () => {
+  let clock = 1_000_000;
+  const q = createBridgeQueue({ now: () => clock });
+  await Promise.all([
+    q.takeJobs(0, { instanceId: 'ip:172.18.0.1' }),
+    q.takeJobs(0, { instanceId: 'ip:172.18.0.1' }),
+  ]);
+  // wait=0 olduğu için iki yoklama da hemen kapandı; yine de ikinci bir plugin
+  // olduğunu biliyoruz — ikincisi iki yoklama arasında olabilir.
+  const q2 = createBridgeQueue();
+  const held = [
+    q2.takeJobs(200, { instanceId: 'ip:172.18.0.1' }),
+    q2.takeJobs(200, { instanceId: 'ip:172.18.0.1' }),
+  ];
+  await Promise.all(held);
+  assert.equal(q2.routingAmbiguity().ambiguous, true, 'kapanmış yoklamalar da sayılmalı');
+  assert.equal(q2.stats().peakPollers, 2);
+});
+
+test('kuyruk: tek plugin tek yoklama tutar — belirsizlik YOK', async () => {
+  const q = createBridgeQueue();
+  const first = q.takeJobs(120, { instanceId: 'ip:172.18.0.1' });
+  await first;
+  const second = q.takeJobs(120, { instanceId: 'ip:172.18.0.1' });
+  await second;
+  const routing = q.routingAmbiguity();
+  assert.equal(routing.ambiguous, false, 'ardışık yoklamalar belirsizlik değildir');
+  assert.equal(q.stats().peakPollers, 1);
+});
+
+test('kuyruk: sonuç, işi hangi yoklamanın aldığını taşır', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/link/verify' }, 2000);
+  const jobs = await q.takeJobs(0, { instanceId: 'mc-canli' });
+  q.completeJob(jobs[0].jobId, 404, { error: 'invalid_code' });
+  const res = await promise;
+  assert.equal(res.claimedBy, 'mc-canli');
+  assert.ok(res.claimedPollId, 'yoklama kimliği sonuca iliştirilmeli');
+});
+
+test('kuyruk: arka arkaya iki iş, iki bekleyen yoklamaya BÖLÜNÜR (arızanın mekaniği)', async () => {
+  const q = createBridgeQueue();
+  const a = q.takeJobs(500, { instanceId: 'ip:172.18.0.1' });
+  const b = q.takeJobs(500, { instanceId: 'ip:172.18.0.1' });
+  q.enqueue({ path: '/api/link/status' }, 2000).catch(() => {});
+  q.enqueue({ method: 'POST', path: '/api/link/verify' }, 2000).catch(() => {});
+
+  const [jobsA, jobsB] = await Promise.all([a, b]);
+  assert.deepEqual(jobsA.map((j) => j.path), ['/api/link/status']);
+  assert.deepEqual(jobsB.map((j) => j.path), ['/api/link/verify'],
+    'sorgu ve doğrulama farklı pluginlere düşüyor — sahte invalid_code tam olarak budur');
+  q.reset();
+});
+
+test('kuyruk: kopan bağlantının yoklaması hemen düşer (yanlış pozitif koruması)', async () => {
+  const q = createBridgeQueue();
+  const ac = new AbortController();
+  const terk = q.takeJobs(5000, { instanceId: 'ip:172.18.0.1', signal: ac.signal });
+  assert.equal(q.stats().pollers, 1);
+
+  // Plugin yeniden başladı: eski bağlantı koptu.
+  ac.abort();
+  assert.deepEqual(await terk, []);
+  assert.equal(q.stats().pollers, 0, 'terk edilen yoklama açık sayılmamalı');
+
+  // Yeni süreç yoklamaya başlar — bu TEK plugin'dir, belirsizlik olmamalı.
+  const yeni = q.takeJobs(120, { instanceId: 'ip:172.18.0.1' });
+  assert.equal(q.routingAmbiguity().ambiguous, false,
+    'yeniden başlatma "iki plugin" sanılmamalı — hesap bağlama boş yere bloklanmaz');
+  await yeni;
+});
+
+test('kuyruk: zaten iptal edilmiş sinyalle yoklama anında boş döner', async () => {
+  const q = createBridgeQueue();
+  const ac = new AbortController();
+  ac.abort();
+  assert.deepEqual(await q.takeJobs(5000, { instanceId: 'mc-1', signal: ac.signal }), []);
+  assert.equal(q.stats().pollers, 0);
+});
+
+/* ------------------------------------------------------------------ */
 /* Public stats proxy                                                  */
 /* ------------------------------------------------------------------ */
 

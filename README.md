@@ -236,11 +236,24 @@ hatası olarak anlatılır. Doğrulamanın tek doğruluk kaynağı plugin'dir �
 kod üretmez, saklamaz.
 
 Aynı `BRIDGE_SECRET` ile birden fazla plugin bağlanırsa doğrulama rastgele bir
-sunucuya gönderilmez: bot `multiple_plugin_instances` hatası verir. Kesin ayrım
-için plugin tarafında `BRIDGE_INSTANCE_ID` ayarlanır ve yoklama isteklerinde
-`X-Bridge-Instance` başlığıyla gönderilir (başlıksız eski pluginler çalışmaya
-devam eder). `/sağlık` çıktısı plugin bağlantısını, son yoklama zamanını ve
-aktif poller/instance sayısını gösterir.
+sunucuya gönderilmez: bot `multiple_plugin_instances` hatası verir. Bu önemlidir,
+çünkü bağlama kodları **plugin'in belleğinde** yaşar — kodu üreten sunucu ile
+doğrulayan sunucu farklı olursa doğru kod zorunlu olarak reddedilir.
+
+Belirsizlik iki bağımsız sinyalle yakalanır:
+
+1. **Farklı instance kimlikleri** — plugin `bridge.instance-id` değerini her
+   yoklamada `X-Bridge-Instance` başlığıyla gönderir.
+2. **Eşzamanlı uzun-yoklama sayısı** — sağlıklı tek plugin aynı anda yalnız bir
+   yoklama tutar, dolayısıyla ikinci bir açık yoklama ikinci bir süreç demektir.
+   Bu sinyal kimlikten ve IP'den bağımsızdır: ters vekil (Dokploy/Traefik)
+   arkasında tüm pluginler aynı IP'den göründüğü için kimlik sayımı tek başına
+   **kördür**.
+
+Başlık göndermeyen eski pluginler çalışmaya devam eder (2. sinyal onları da
+yakalar). `/sağlık` çıktısı plugin bağlantısını, son yoklama zamanını, açık
+poller/tepe değerini ve instance sayısını gösterir; `[mcapi]` log satırlarındaki
+`inst=` / `poll=` alanları işi hangi yoklamanın aldığını söyler.
 
 ## Bridge güvenliği (Faz 2)
 
