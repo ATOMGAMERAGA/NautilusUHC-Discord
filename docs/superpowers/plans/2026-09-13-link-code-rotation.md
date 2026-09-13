@@ -69,6 +69,6 @@ Run `plugin-patch/build.ps1` with the supplied JAR and Java 21 bin directory. Ex
 
 Run both Java regression tests against the built JAR, repeat the rotation test to stress nondeterministic behavior, inspect embedded version/class hashes, run `npm test`, and run `npm run check`.
 
-- [ ] **Step 4: Review, commit, push, and verify the remote commit**
+- [x] **Step 4: Review, commit, push, and verify the remote commit**
 
 Review the final diff, commit the source/tests/JAR to `main`, push `main`, then confirm `origin/main` resolves to the local commit.
