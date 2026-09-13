@@ -90,17 +90,16 @@ public final class LinkService {
             return withFileLock(() -> {
                 refreshPersisted();
                 pruneUnlocked();
-                for (PendingCode pending : this.codes.values()) {
-                    if (pending.uuid().equals(uuid) && !pending.expired(now())) {
-                        this.storedCodes.putIfAbsent(hash(pending.code()), StoredCode.from(pending));
-                        persist();
-                        return pending;
-                    }
-                }
-
-                // Yeniden başlatmadan kalan kaydın ham kodu bilinmediğinden /link
-                // çağrısında o oyuncuya yeni bir kod ver ve önceki özeti geçersiz kıl.
+                // Her /link çağrısı yalnız en son gösterilen kodu geçerli bırakır.
+                // Ham kodlar sadece bu servis örneğinde bulunduğundan onları da
+                // kaldır; aksi hâlde eski kod doğrulama sırasında yeniden canlanabilir.
+                List<String> retiredCodes = new ArrayList<>();
+                this.codes.entrySet().stream()
+                        .filter(entry -> entry.getValue().uuid().equals(uuid))
+                        .map(Map.Entry::getKey)
+                        .forEach(retiredCodes::add);
                 List<String> retiredDigests = new ArrayList<>();
+                retiredCodes.stream().map(LinkService::hash).forEach(retiredDigests::add);
                 this.storedCodes.entrySet().stream()
                         .filter(entry -> entry.getValue().uuid().equals(uuid))
                         .map(Map.Entry::getKey)
@@ -109,6 +108,7 @@ public final class LinkService {
                         .filter(entry -> entry.getValue().uuid().equals(uuid))
                         .map(Map.Entry::getKey)
                         .forEach(retiredDigests::add);
+                retiredCodes.forEach(this.codes::remove);
                 retiredDigests.forEach(this.storedCodes::remove);
                 retiredDigests.forEach(this.usedCodes::remove);
 
@@ -152,8 +152,9 @@ public final class LinkService {
             refreshPersisted();
             String code = normalize(rawCode);
             String digest = hash(code);
-            PendingCode inMemory = this.codes.get(code);
-            StoredCode pending = storedCode(inMemory, digest);
+            // Diskteki özet kümesi doğruluk kaynağıdır. Bellekte kalmış bir ham
+            // kod, başka /link çağrısının iptal ettiği kaydı yeniden oluşturamaz.
+            StoredCode pending = this.storedCodes.get(digest);
             if (pending == null) {
                 return replayResult(digest, discordId);
             }
@@ -205,15 +206,6 @@ public final class LinkService {
             return new VerifyResult.InvalidCode();
         }
         return new VerifyResult.Linked(linked);
-    }
-
-    private StoredCode storedCode(PendingCode inMemory, String digest) {
-        if (inMemory != null) {
-            StoredCode value = StoredCode.from(inMemory);
-            this.storedCodes.putIfAbsent(digest, value);
-            return value;
-        }
-        return this.storedCodes.get(digest);
     }
 
     private void removePendingCode(String code, String digest) {

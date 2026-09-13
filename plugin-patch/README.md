@@ -1,6 +1,6 @@
 # NautilusUHC link-code patch
 
-Bu klasör, dağıtılan `NautilusUHC-1.1.0-linkfix-b1.jar` için hazırlanan
+Bu klasör, dağıtılan `NautilusUHC-1.2.0.jar` için hazırlanan
 `com.nautilus.discordlink.LinkService` ve hata yutmayan atomik bağlantı
 yardımcısının kaynaklarını ve regresyon testini tutar.
 
@@ -17,12 +17,18 @@ kalmış bir doğrulama sonradan başka bir Discord hesabının mevcut Minecraft
 bağlantısını ezmesine izin vermez. Kayıp/bozuk kod deposu veya DB erişim hatası
 da `invalid_code` olarak maskelenmez.
 
+Her `/link` çağrısı artık aynı oyuncunun önceki bekleyen kodunu hem bellekten
+hem kalıcı özet deposundan iptal edip yeni bir kod üretir. Doğrulama yalnız
+kilit altında yenilenmiş kalıcı özet deposunu kabul eder; eski bir servis
+örneğinde kalmış ham kod yeniden geçerli hâle gelemez. Aktif kodlar farklı
+oyuncular arasında da çakışma denetiminden geçer.
+
 JDK 21 ile dağıtım JAR'ını üretmek için:
 
 ```powershell
-.\plugin-patch\build.ps1 -InputJar C:\path\NautilusUHC-1.1.0-linkfix-b1.jar
+.\plugin-patch\build.ps1 -InputJar C:\path\NautilusUHC-1.2.0.jar
 ```
 
-Çıktı varsayılan olarak `dist/NautilusUHC-1.1.2-linkfix.jar` olur. Derleme,
-JAR içindeki `plugin.yml` sürümünü `1.1.2` yapar ve ilk kurulum
+Çıktı varsayılan olarak `dist/NautilusUHC-1.2.1-linkfix.jar` olur. Derleme,
+JAR içindeki `plugin.yml` sürümünü `1.2.1` yapar ve ilk kurulum
 `config.yml` dosyasına gerçek bir bridge token gömülmesini engeller.

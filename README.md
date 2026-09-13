@@ -242,10 +242,12 @@ sunucuya ayrı ve hedefli doğrulama yapar; ancak bütün sunucular açıkça
 Instance kimliği aynı veya anonim kaldığı için güvenli hedefleme yapılamıyorsa
 bot `multiple_plugin_instances` hatası verir.
 
-`NautilusUHC-1.1.2-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
+`NautilusUHC-1.2.1-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
 oyuncu bilgisi ve son kullanma zamanı
 `plugins/NautilusUHC/pending-link-codes.dat` dosyasına atomik yazılır. Böylece
-plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz. Her
+plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz. Oyuncunun
+her `/link` çağrısı yeni kod üretir ve daha önce gösterilen kodu anında iptal
+eder; farklı oyuncuların aktif kodları birbirine karışmaz. Her
 doğrulama dosyayı kilit altında yeniden okur; önceden açılmış bir servis örneği
 de sonradan üretilen kodu görür. Başarılı doğrulamadan sonra ham kod saklanmadan
 10 dakikalık, Discord hesabına bağlı bir başarı makbuzu tutulur. Aynı isteğin

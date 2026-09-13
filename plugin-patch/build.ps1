@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InputJar,
 
-    [string]$OutputJar = (Join-Path $PSScriptRoot '..\dist\NautilusUHC-1.1.2-linkfix.jar'),
+    [string]$OutputJar = (Join-Path $PSScriptRoot '..\dist\NautilusUHC-1.2.1-linkfix.jar'),
 
     [string]$JavaBin = ''
 )
@@ -51,7 +51,7 @@ try {
     $utf8NoBom = [Text.UTF8Encoding]::new($false)
     $pluginFile = Join-Path $metadata 'plugin.yml'
     $pluginText = [IO.File]::ReadAllText($pluginFile)
-    $pluginText = [regex]::Replace($pluginText, '(?m)^version:\s*.*$', 'version: 1.1.2')
+    $pluginText = [regex]::Replace($pluginText, '(?m)^version:\s*.*$', 'version: 1.2.1')
     [IO.File]::WriteAllText($pluginFile, $pluginText, $utf8NoBom)
 
     # İlk kurulum varsayılanına üretim sırrı gömmeyelim. Sunucudaki mevcut
