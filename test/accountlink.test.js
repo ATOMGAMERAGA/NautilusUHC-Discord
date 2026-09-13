@@ -354,6 +354,26 @@ test('ters vekil arkasında tek kimlik + iki eşzamanlı yoklama da bloklanır',
   assert.match(logger.lines.join('\n'), /uzun-yoklama/, 'gerekçe logda açıkça yazmalı');
 });
 
+test('başka kimlikler varken yinelenen instance kimliği de doğrulamayı bloklar', async () => {
+  const logger = captureLogger();
+  const api = {
+    bridgeStatus: () => ({
+      ok: true,
+      transport: 'reverse',
+      instances: ['mc-a', 'mc-b'],
+      routing: { reason: 'duplicate_instance', duplicateInstances: ['mc-b'] },
+    }),
+    bridgeSnapshot: () => ({ pollers: 3, peakPollers: 3, instances: 2 }),
+    linkStatus: async () => assert.fail('belirsiz instance varken sorgu atılmamalı'),
+    linkVerify: async () => assert.fail('belirsiz instance varken doğrulama atılmamalı'),
+  };
+
+  const d = await verifyLinkCode({
+    api, code: CODE, discordId: '1', discordTag: 't', logger,
+  });
+  assert.equal(d.failure.kind, 'ambiguous_plugin_instance');
+});
+
 test('aynı instance\'ın ardışık farklı pollId\'leri çoklu plugin alarmı üretmez', async () => {
   const logger = captureLogger();
   // Tek plugin her uzun-yoklamada yeni pollId alır; süreç kimliği aynı kaldığı
@@ -414,6 +434,41 @@ test('Discord hesabı zaten bağlıysa doğrulama isteği atılmaz', async () =>
   const statusJob = queue.jobs.find((j) => j.path.startsWith('/api/link/status'));
   assert.equal(statusJob.targetInstance, 'mc-live', 'durum sorgusu da aynı instance\'a hedeflenmeli');
   assert.equal(queue.jobs.filter((j) => j.path === '/api/link/verify').length, 0);
+});
+
+test('aynı Discord ve kod için eşzamanlı modal teslimleri tek doğrulamada birleşir', async () => {
+  let finishVerify;
+  const verifyGate = new Promise((resolve) => { finishVerify = resolve; });
+  let verifyCalls = 0;
+  const api = {
+    bridgeStatus: () => ({
+      ok: true, transport: 'reverse', instances: ['mc-live'],
+      routing: { reason: 'single_instance' },
+    }),
+    bridgeSnapshot: () => ({ pollers: 1, peakPollers: 1, instances: 1 }),
+    linkStatus: async () => ({ ok: true, linked: false }),
+    linkVerify: async () => {
+      verifyCalls += 1;
+      await verifyGate;
+      return { ok: true, status: 200, mc: 'Oyuncu1', correlationId: 'test-cid' };
+    },
+  };
+
+  const first = verifyLinkCode({
+    api, code: CODE, discordId: '424242', discordTag: 'oyuncu#0', logger: captureLogger(),
+  });
+  const duplicate = verifyLinkCode({
+    api, code: ` ${CODE.toLowerCase()} `, discordId: '424242', discordTag: 'oyuncu#0',
+    logger: captureLogger(),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const callsBeforeRelease = verifyCalls;
+  finishVerify();
+  const [firstResult, duplicateResult] = await Promise.all([first, duplicate]);
+
+  assert.equal(callsBeforeRelease, 1, 'plugin yalnız bir kez doğrulanmalı');
+  assert.deepEqual(duplicateResult, firstResult, 'yinelenen teslim aynı sonucu paylaşmalı');
 });
 
 /* ------------------------------------------------------------------ */

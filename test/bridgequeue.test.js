@@ -213,6 +213,21 @@ test('kuyruk: aynı IP\'den iki eşzamanlı yoklama belirsizlik sayılır', asyn
   await Promise.all([a, b]);
 });
 
+test('kuyruk: farklı kimliklerin yanında yinelenen kimlik ayrıca yakalanır', async () => {
+  const q = createBridgeQueue();
+  const held = [
+    q.takeJobs(200, { instanceId: 'mc-a' }),
+    q.takeJobs(200, { instanceId: 'mc-b' }),
+    q.takeJobs(200, { instanceId: 'mc-b' }),
+  ];
+
+  const routing = q.routingAmbiguity();
+  assert.equal(routing.ambiguous, true);
+  assert.equal(routing.reason, 'duplicate_instance');
+  assert.deepEqual(routing.duplicateInstances, ['mc-b']);
+  await Promise.all(held);
+});
+
 test('kuyruk: belirsizlik yoklamalar kapandıktan sonra da pencere boyunca hatırlanır', async () => {
   let clock = 1_000_000;
   const q = createBridgeQueue({ now: () => clock });

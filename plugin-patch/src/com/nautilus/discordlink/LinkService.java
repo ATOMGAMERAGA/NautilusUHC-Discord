@@ -4,6 +4,8 @@ import com.nautilus.storage.DataStore;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +17,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,21 +31,50 @@ public final class LinkService {
     private static final char[] ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".toCharArray();
     private static final int CODE_LENGTH = 6;
     public static final long CODE_TTL_MILLIS = 600_000L;
+    private static final long REPLAY_TTL_MILLIS = 600_000L;
     private static final String PENDING_FILE_PROPERTY = "nautilus.link.pending-file";
-    private static final String FILE_HEADER = "nautilus-link-codes-v1";
+    private static final String FILE_HEADER_V1 = "nautilus-link-codes-v1";
+    private static final String FILE_HEADER = "nautilus-link-codes-v2";
+    private static final String STORE_MARKER = "nautilus-link-store-initialized-v1";
 
     private final DataStore store;
+    private final LinkStoreAccess linkStore;
     private final SecureRandom random = new SecureRandom();
     private final Map<String, PendingCode> codes = new ConcurrentHashMap<>();
     private final Map<String, StoredCode> storedCodes = new ConcurrentHashMap<>();
+    private final Map<String, UsedCode> usedCodes = new ConcurrentHashMap<>();
     private final Path pendingFile;
+    private final Path lockFile;
+    private final Path markerFile;
+    private final Object fileMutex;
     private LongSupplier clock = System::currentTimeMillis;
 
     public LinkService(DataStore dataStore) {
         this.store = dataStore;
+        this.linkStore = new LinkStoreAccess(dataStore);
         this.pendingFile = resolvePendingFile();
-        loadPersisted();
-        prune();
+        this.lockFile = this.pendingFile.resolveSibling(
+                this.pendingFile.getFileName().toString() + ".lock");
+        this.markerFile = this.pendingFile.resolveSibling(
+                this.pendingFile.getFileName().toString() + ".initialized");
+        // String havuzu JVM genelinde ortaktır; aynı JAR'ın iki classloader ile
+        // açıldığı durumda bile FileLock çağrılarının birbiriyle çakışmasını önler.
+        this.fileMutex = this.pendingFile.toString().toLowerCase(Locale.ROOT).intern();
+        boolean freshStore = !Files.exists(this.pendingFile)
+                && !Files.exists(this.markerFile)
+                && !Files.exists(temporaryFile());
+        withFileLock(() -> {
+            if (freshStore && !Files.exists(this.pendingFile)) {
+                persist();
+            } else {
+                refreshPersisted();
+                ensureMarker();
+            }
+            if (pruneUnlocked()) {
+                persist();
+            }
+            return null;
+        });
     }
 
     public void setClock(LongSupplier longSupplier) {
@@ -55,36 +87,47 @@ public final class LinkService {
 
     public PendingCode issueCode(UUID uuid, String mcName) {
         synchronized (this) {
-            prune();
-            for (PendingCode pending : this.codes.values()) {
-                if (pending.uuid().equals(uuid) && !pending.expired(now())) {
-                    this.storedCodes.putIfAbsent(hash(pending.code()), StoredCode.from(pending));
-                    persist();
-                    return pending;
+            return withFileLock(() -> {
+                refreshPersisted();
+                pruneUnlocked();
+                for (PendingCode pending : this.codes.values()) {
+                    if (pending.uuid().equals(uuid) && !pending.expired(now())) {
+                        this.storedCodes.putIfAbsent(hash(pending.code()), StoredCode.from(pending));
+                        persist();
+                        return pending;
+                    }
                 }
-            }
 
-            // Yeniden başlatmadan kalan kaydın ham kodu bilinmediğinden /link
-            // çağrısında o oyuncuya yeni bir kod ver ve önceki özeti geçersiz kıl.
-            List<String> retiredDigests = this.storedCodes.entrySet().stream()
-                    .filter(entry -> entry.getValue().uuid().equals(uuid))
-                    .map(Map.Entry::getKey)
-                    .toList();
-            retiredDigests.forEach(this.storedCodes::remove);
+                // Yeniden başlatmadan kalan kaydın ham kodu bilinmediğinden /link
+                // çağrısında o oyuncuya yeni bir kod ver ve önceki özeti geçersiz kıl.
+                List<String> retiredDigests = new ArrayList<>();
+                this.storedCodes.entrySet().stream()
+                        .filter(entry -> entry.getValue().uuid().equals(uuid))
+                        .map(Map.Entry::getKey)
+                        .forEach(retiredDigests::add);
+                this.usedCodes.entrySet().stream()
+                        .filter(entry -> entry.getValue().uuid().equals(uuid))
+                        .map(Map.Entry::getKey)
+                        .forEach(retiredDigests::add);
+                retiredDigests.forEach(this.storedCodes::remove);
+                retiredDigests.forEach(this.usedCodes::remove);
 
-            String code;
-            String digest;
-            do {
-                code = randomCode();
-                digest = hash(code);
-            } while (this.codes.containsKey(code)
-                    || this.storedCodes.containsKey(digest)
-                    || retiredDigests.contains(digest));
-            PendingCode pending = new PendingCode(code, uuid, mcName, now() + CODE_TTL_MILLIS);
-            this.codes.put(code, pending);
-            this.storedCodes.put(digest, StoredCode.from(pending));
-            persist();
-            return pending;
+                String code;
+                String digest;
+                do {
+                    code = randomCode();
+                    digest = hash(code);
+                } while (this.codes.containsKey(code)
+                        || this.storedCodes.containsKey(digest)
+                        || this.usedCodes.containsKey(digest)
+                        || retiredDigests.contains(digest));
+                PendingCode pending = new PendingCode(code, uuid, mcName,
+                        now() + CODE_TTL_MILLIS);
+                this.codes.put(code, pending);
+                this.storedCodes.put(digest, StoredCode.from(pending));
+                persist();
+                return pending;
+            });
         }
     }
 
@@ -96,38 +139,72 @@ public final class LinkService {
         return result.toString();
     }
 
-    private synchronized void prune() {
+    private boolean pruneUnlocked() {
         long now = now();
         boolean changed = this.codes.entrySet().removeIf(entry -> entry.getValue().expired(now));
         changed |= this.storedCodes.entrySet().removeIf(entry -> entry.getValue().expired(now));
-        if (changed) {
-            persist();
-        }
+        changed |= this.usedCodes.entrySet().removeIf(entry -> entry.getValue().expired(now));
+        return changed;
     }
 
     public synchronized VerifyResult verify(String rawCode, String discordId, String discordTag) {
-        String code = normalize(rawCode);
-        String digest = hash(code);
-        PendingCode inMemory = this.codes.get(code);
-        StoredCode pending = storedCode(inMemory, digest);
-        if (pending == null) {
+        return withFileLock(() -> {
+            refreshPersisted();
+            String code = normalize(rawCode);
+            String digest = hash(code);
+            PendingCode inMemory = this.codes.get(code);
+            StoredCode pending = storedCode(inMemory, digest);
+            if (pending == null) {
+                return replayResult(digest, discordId);
+            }
+            if (pending.expired(now())) {
+                removePendingCode(code, digest);
+                persist();
+                return new VerifyResult.ExpiredCode();
+            }
+
+            DataStore.LinkRow row = new DataStore.LinkRow(
+                    pending.uuid(), pending.mcName(), discordId, discordTag, now());
+            LinkStoreAccess.CreateResult create = this.linkStore.createIfAbsent(row);
+            if (create.state() == LinkStoreAccess.CreateState.DISCORD_ALREADY_LINKED) {
+                return new VerifyResult.DiscordAlreadyLinked(create.row());
+            }
+            if (create.state() == LinkStoreAccess.CreateState.UUID_ALREADY_LINKED) {
+                // Kod daha önce başka bir Discord hesabınca kullanılmış olabilir.
+                // DataStore'un eski upsert davranışına asla düşüp bağı devralma.
+                return new VerifyResult.InvalidCode();
+            }
+
+            removePendingCode(code, digest);
+            this.usedCodes.put(digest, new UsedCode(
+                    pending.uuid(), hash(discordId), now() + REPLAY_TTL_MILLIS));
+            persist();
+            return new VerifyResult.Linked(create.row());
+        });
+    }
+
+    private VerifyResult replayResult(String digest, String discordId) {
+        UsedCode used = this.usedCodes.get(digest);
+        if (used == null) {
             return new VerifyResult.InvalidCode();
         }
-        if (pending.expired(now())) {
-            removeCode(code, digest);
-            return new VerifyResult.ExpiredCode();
+        if (used.expired(now())) {
+            this.usedCodes.remove(digest);
+            persist();
+            return new VerifyResult.InvalidCode();
         }
-
-        DataStore.LinkRow existing = this.store.linkByDiscord(discordId);
-        if (existing != null && !existing.uuid().equals(pending.uuid())) {
-            return new VerifyResult.DiscordAlreadyLinked(existing);
+        if (!MessageDigest.isEqual(
+                used.discordDigest().getBytes(StandardCharsets.US_ASCII),
+                hash(discordId).getBytes(StandardCharsets.US_ASCII))) {
+            return new VerifyResult.InvalidCode();
         }
-
-        removeCode(code, digest);
-        DataStore.LinkRow row = new DataStore.LinkRow(
-                pending.uuid(), pending.mcName(), discordId, discordTag, now());
-        this.store.linkCreate(row);
-        return new VerifyResult.Linked(row);
+        // DataStore'un normal sorguları SQL hatasını null'a çevirir. Burada
+        // hata yutmayan sorgu kullanılır; altyapı arızası invalid_code olamaz.
+        DataStore.LinkRow linked = this.linkStore.byDiscord(discordId);
+        if (linked == null || !linked.uuid().equals(used.uuid())) {
+            return new VerifyResult.InvalidCode();
+        }
+        return new VerifyResult.Linked(linked);
     }
 
     private StoredCode storedCode(PendingCode inMemory, String digest) {
@@ -139,15 +216,19 @@ public final class LinkService {
         return this.storedCodes.get(digest);
     }
 
-    private void removeCode(String code, String digest) {
+    private void removePendingCode(String code, String digest) {
         this.codes.remove(code);
         this.storedCodes.remove(digest);
-        persist();
     }
 
     public synchronized int pendingCodeCount() {
-        prune();
-        return this.storedCodes.size();
+        return withFileLock(() -> {
+            refreshPersisted();
+            if (pruneUnlocked()) {
+                persist();
+            }
+            return this.storedCodes.size();
+        });
     }
 
     public boolean isLinked(UUID uuid) {
@@ -176,52 +257,108 @@ public final class LinkService {
         return this.store.linkDelete(row.uuid()) ? Optional.of(row) : Optional.empty();
     }
 
-    private void loadPersisted() {
-        if (!Files.isRegularFile(this.pendingFile)) {
-            return;
-        }
-        try {
-            for (String line : Files.readAllLines(this.pendingFile, StandardCharsets.UTF_8)) {
-                loadLine(line);
+    private void refreshPersisted() throws IOException {
+        Map<String, StoredCode> pendingSnapshot = new HashMap<>();
+        Map<String, UsedCode> usedSnapshot = new HashMap<>();
+        Path source = this.pendingFile;
+        boolean recoverTemporary = false;
+        if (!Files.isRegularFile(source)) {
+            if (Files.exists(source)) {
+                throw new IOException("Bağlantı kodu deposu normal bir dosya değil");
             }
-        } catch (IOException error) {
-            System.err.println("[NautilusUHC] Bekleyen bağlantı kodları okunamadı: "
-                    + error.getClass().getSimpleName());
+            Path temporary = temporaryFile();
+            if (!Files.isRegularFile(temporary)) {
+                throw new IOException("Başlatılmış bağlantı kodu deposu kayıp");
+            }
+            source = temporary;
+            recoverTemporary = true;
         }
+
+        List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+        if (lines.isEmpty()) {
+            throw new IOException("Bağlantı kodu deposu boş");
+        }
+        String header = lines.get(0);
+        if (!FILE_HEADER.equals(header) && !FILE_HEADER_V1.equals(header)) {
+            throw new IOException("Bağlantı kodu deposu sürümü geçersiz");
+        }
+        for (int index = 1; index < lines.size(); index++) {
+            String line = lines.get(index);
+            if (!line.isBlank()) {
+                loadLine(header, line, index + 1, pendingSnapshot, usedSnapshot);
+            }
+        }
+        if (recoverTemporary) {
+            try {
+                Files.move(source, this.pendingFile, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(source, this.pendingFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        this.storedCodes.clear();
+        this.storedCodes.putAll(pendingSnapshot);
+        this.usedCodes.clear();
+        this.usedCodes.putAll(usedSnapshot);
+        // Dosya doğruluk kaynağıdır. Başka bir doğrulayıcı kodu tükettiyse bu
+        // örnekte kalan ham kod tekrar kullanılamaz.
+        this.codes.entrySet().removeIf(entry -> {
+            StoredCode stored = this.storedCodes.get(hash(entry.getKey()));
+            return stored == null || !stored.uuid().equals(entry.getValue().uuid());
+        });
     }
 
-    private void loadLine(String line) {
-        if (line.isBlank() || FILE_HEADER.equals(line)) {
-            return;
-        }
+    private void loadLine(String header, String line, int lineNumber,
+                          Map<String, StoredCode> pendingSnapshot,
+                          Map<String, UsedCode> usedSnapshot) throws IOException {
         try {
             String[] fields = line.split("\\t", -1);
-            if (fields.length != 4 || !fields[0].matches("[A-Za-z0-9_-]{43}")) {
+            // v1: digest, uuid, base64(mcName), expiresAt
+            if (FILE_HEADER_V1.equals(header) && fields.length == 4
+                    && fields[0].matches("[A-Za-z0-9_-]{43}")) {
+                UUID uuid = UUID.fromString(fields[1]);
+                String mcName = decode(fields[2]);
+                long expiresAt = Long.parseLong(fields[3]);
+                pendingSnapshot.put(fields[0], new StoredCode(uuid, mcName, expiresAt));
                 return;
             }
-            UUID uuid = UUID.fromString(fields[1]);
-            String mcName = new String(
-                    Base64.getUrlDecoder().decode(fields[2]), StandardCharsets.UTF_8);
-            long expiresAt = Long.parseLong(fields[3]);
-            this.storedCodes.put(fields[0], new StoredCode(uuid, mcName, expiresAt));
-        } catch (IllegalArgumentException ignored) {
-            // Tek bir bozuk satır diğer geçerli kodların yüklenmesini engellemesin.
+            // v2 pending: P, digest, uuid, base64(mcName), expiresAt
+            if (FILE_HEADER.equals(header) && fields.length == 5 && "P".equals(fields[0])
+                    && fields[1].matches("[A-Za-z0-9_-]{43}")) {
+                pendingSnapshot.put(fields[1], new StoredCode(
+                        UUID.fromString(fields[2]), decode(fields[3]), Long.parseLong(fields[4])));
+                return;
+            }
+            // v2 receipt: R, codeDigest, uuid, discordDigest, expiresAt
+            if (FILE_HEADER.equals(header) && fields.length == 5 && "R".equals(fields[0])
+                    && fields[1].matches("[A-Za-z0-9_-]{43}")
+                    && fields[3].matches("[A-Za-z0-9_-]{43}")) {
+                usedSnapshot.put(fields[1], new UsedCode(
+                        UUID.fromString(fields[2]), fields[3], Long.parseLong(fields[4])));
+                return;
+            }
+            throw new IllegalArgumentException("tanınmayan kayıt biçimi");
+        } catch (IllegalArgumentException error) {
+            // İçeriği (kod özeti dahil) hata mesajına veya loga koyma.
+            throw new IOException("Bağlantı kodu deposunda bozuk kayıt: satır "
+                    + lineNumber, error);
         }
     }
 
     private void persist() {
         try {
             Path parent = this.pendingFile.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            Path temporary = this.pendingFile.resolveSibling(
-                    this.pendingFile.getFileName().toString() + ".tmp");
+            if (parent != null) Files.createDirectories(parent);
+            Path temporary = temporaryFile();
             List<String> lines = new ArrayList<>();
             lines.add(FILE_HEADER);
             this.storedCodes.entrySet().stream()
                     .sorted(Comparator.comparing(Map.Entry::getKey))
-                    .map(entry -> encode(entry.getKey(), entry.getValue()))
+                    .map(entry -> encodePending(entry.getKey(), entry.getValue()))
+                    .forEach(lines::add);
+            this.usedCodes.entrySet().stream()
+                    .sorted(Comparator.comparing(Map.Entry::getKey))
+                    .map(entry -> encodeUsed(entry.getKey(), entry.getValue()))
                     .forEach(lines::add);
             Files.write(temporary, lines, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
@@ -232,17 +369,56 @@ public final class LinkService {
             } catch (AtomicMoveNotSupportedException ignored) {
                 Files.move(temporary, this.pendingFile, StandardCopyOption.REPLACE_EXISTING);
             }
+            ensureMarker();
         } catch (IOException error) {
-            // Ham kodu veya dosya içeriğini hiçbir zaman loglama.
-            System.err.println("[NautilusUHC] Bekleyen bağlantı kodları kaydedilemedi: "
-                    + error.getClass().getSimpleName());
+            throw new IllegalStateException("Bağlantı kodu deposu yazılamadı", error);
         }
     }
 
-    private static String encode(String digest, StoredCode value) {
+    private static String encodePending(String digest, StoredCode value) {
         String name = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(value.mcName().getBytes(StandardCharsets.UTF_8));
-        return digest + '\t' + value.uuid() + '\t' + name + '\t' + value.expiresAt();
+        return "P\t" + digest + '\t' + value.uuid() + '\t' + name + '\t' + value.expiresAt();
+    }
+
+    private static String encodeUsed(String digest, UsedCode value) {
+        return "R\t" + digest + '\t' + value.uuid() + '\t'
+                + value.discordDigest() + '\t' + value.expiresAt();
+    }
+
+    private static String decode(String encoded) {
+        return new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
+    }
+
+    private Path temporaryFile() {
+        return this.pendingFile.resolveSibling(
+                this.pendingFile.getFileName().toString() + ".tmp");
+    }
+
+    private void ensureMarker() throws IOException {
+        if (!Files.exists(this.markerFile)) {
+            Files.writeString(this.markerFile, STORE_MARKER + System.lineSeparator(),
+                    StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE);
+        }
+    }
+
+    private <T> T withFileLock(LockedOperation<T> operation) {
+        synchronized (this.fileMutex) {
+            try {
+                Path parent = this.lockFile.getParent();
+                if (parent != null) Files.createDirectories(parent);
+                try (FileChannel channel = FileChannel.open(this.lockFile,
+                        StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                     FileLock ignored = channel.lock()) {
+                    return operation.run();
+                }
+            } catch (IOException error) {
+                // Depo okunamıyorsa geçerli bir koda "invalid" demek yerine
+                // isteği sunucu hatasıyla durdur.
+                throw new IllegalStateException("Bağlantı kodu deposuna erişilemedi", error);
+            }
+        }
     }
 
     private static String normalize(String raw) {
@@ -282,6 +458,17 @@ public final class LinkService {
         private boolean expired(long now) {
             return now >= this.expiresAt;
         }
+    }
+
+    private record UsedCode(UUID uuid, String discordDigest, long expiresAt) {
+        private boolean expired(long now) {
+            return now >= this.expiresAt;
+        }
+    }
+
+    @FunctionalInterface
+    private interface LockedOperation<T> {
+        T run() throws IOException;
     }
 
     public sealed interface VerifyResult {

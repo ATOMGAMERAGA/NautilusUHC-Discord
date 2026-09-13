@@ -87,6 +87,8 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   const pollers = [];
   /** instanceId → son yoklama zamanı (ms). */
   const instances = new Map();
+  /** Aynı instance kimliğinde iki açık poller'ın en son görüldüğü zaman. */
+  const duplicateInstanceSeenAt = new Map();
 
   let lastPollAt = 0;
   /** Aynı anda en fazla kaç yoklama açıktı ve bu en son ne zaman görüldü. */
@@ -97,6 +99,9 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   function pruneInstances(at = now()) {
     for (const [id, seen] of instances) {
       if (at - seen >= CONNECTED_WINDOW_MS) instances.delete(id);
+    }
+    for (const [id, seen] of duplicateInstanceSeenAt) {
+      if (at - seen >= CONNECTED_WINDOW_MS) duplicateInstanceSeenAt.delete(id);
     }
   }
 
@@ -242,6 +247,9 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       // GERÇEKTEN açık olan yoklamalar üzerinden yapılır (bkz. abort).
       if (pollers.length > peakPollers) peakPollers = pollers.length;
       if (pollers.length > 1) multiPollerSeenAt = at;
+      if (pollers.filter((poller) => poller.instanceId === instanceId).length > 1) {
+        duplicateInstanceSeenAt.set(instanceId, at);
+      }
     });
   }
 
@@ -283,19 +291,26 @@ export function createBridgeQueue({ now = Date.now } = {}) {
    * (2) yalnız "şu an" değil, bağlantı penceresi boyunca hatırlanır: ikinci
    * plugin tam o anda iki yoklama arasında olabilir, belirsizlik yine de gerçektir.
    *
-   * @returns {{ambiguous:boolean, reason:string|null, instances:string[], pollers:number, peakPollers:number}}
+   * @returns {{ambiguous:boolean, reason:string|null, instances:string[], duplicateInstances:string[], pollers:number, peakPollers:number}}
    */
   function routingAmbiguity() {
     const active = activeInstances();
+    const at = now();
+    const duplicateInstances = [...duplicateInstanceSeenAt.entries()]
+      .filter(([, seen]) => at - seen < CONNECTED_WINDOW_MS)
+      .map(([id]) => id)
+      .sort();
     const multiPollerRecent = multiPollerSeenAt > 0
-      && now() - multiPollerSeenAt < CONNECTED_WINDOW_MS;
+      && at - multiPollerSeenAt < CONNECTED_WINDOW_MS;
     let reason = null;
-    if (active.length > 1) reason = 'instances';
+    if (duplicateInstances.length > 0 && active.length > 1) reason = 'duplicate_instance';
+    else if (active.length > 1) reason = 'instances';
     else if (pollers.length > 1 || multiPollerRecent) reason = 'concurrent_pollers';
     return {
       ambiguous: reason !== null,
       reason,
       instances: active,
+      duplicateInstances,
       pollers: pollers.length,
       peakPollers,
     };
@@ -318,6 +333,7 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       instanceIds: ambiguity.instances,
       ambiguous: ambiguity.ambiguous,
       ambiguityReason: ambiguity.reason,
+      duplicateInstanceIds: ambiguity.duplicateInstances,
     };
   }
 
@@ -338,6 +354,7 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     lastPollAt = 0;
     peakPollers = 0;
     multiPollerSeenAt = 0;
+    duplicateInstanceSeenAt.clear();
   }
 
   return {

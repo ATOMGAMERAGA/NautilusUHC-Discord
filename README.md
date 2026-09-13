@@ -242,11 +242,23 @@ sunucuya ayrı ve hedefli doğrulama yapar; ancak bütün sunucular açıkça
 Instance kimliği aynı veya anonim kaldığı için güvenli hedefleme yapılamıyorsa
 bot `multiple_plugin_instances` hatası verir.
 
-`NautilusUHC-1.1.1-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
+`NautilusUHC-1.1.2-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
 oyuncu bilgisi ve son kullanma zamanı
 `plugins/NautilusUHC/pending-link-codes.dat` dosyasına atomik yazılır. Böylece
-plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz; başarılı
-doğrulamadan sonra kayıt silinir ve kod tek kullanımlık kalır.
+plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz. Her
+doğrulama dosyayı kilit altında yeniden okur; önceden açılmış bir servis örneği
+de sonradan üretilen kodu görür. Başarılı doğrulamadan sonra ham kod saklanmadan
+10 dakikalık, Discord hesabına bağlı bir başarı makbuzu tutulur. Aynı isteğin
+bot, ağ veya başka bir replica tarafından tekrar teslimi aynı başarıyı döndürür;
+aynı kullanılmış kod başka bir Discord hesabında kesinlikle kabul edilmez.
+SQLite kaydı transaction içinde yalnız yoksa eklenir; yarım kalmış bir isteğin
+başka Discord hesabıyla mevcut Minecraft bağlantısını ezmesi engellenir. Kod
+deposu ya da veritabanı okunamıyorsa plugin `invalid_code` üretmek yerine açık
+bir sunucu hatası verir.
+
+Bot aynı Discord hesabı ve normalize edilmiş kod için hâlen çalışan modal
+teslimlerini de tek doğrulamada birleştirir. Böylece tek kullanımlık kod ağdaki
+yinelenen teslimler yüzünden yanlışlıkla `invalid_code` sonucuna dönüşmez.
 
 Belirsizlik iki bağımsız sinyalle yakalanır:
 

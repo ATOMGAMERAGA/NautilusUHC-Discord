@@ -47,6 +47,13 @@ export function normalizeLinkCode(raw) {
   return String(raw ?? '').trim().toUpperCase();
 }
 
+/**
+ * Discord aynı modal teslimini yeniden gönderirse aynı bot sürecinde yalnız bir
+ * doğrulama çalıştır. Plugin tarafındaki kalıcı makbuz farklı süreç/replica
+ * tekrarlarını da güvenli biçimde idempotent yapar.
+ */
+const inFlightVerifications = new WeakMap();
+
 const YETKILIYE = 'Bu bir kod hatası değildir; lütfen bir yetkiliye bildir.';
 
 /**
@@ -182,10 +189,31 @@ export function classifyLinkFailure(res = {}) {
  *
  * @returns {Promise<{outcome:'linked'|'already_linked_self'|'failed', mc?:string, failure?:object, correlationId?:string}>}
  */
-export async function verifyLinkCode({
+export function verifyLinkCode({
   api = defaultApi, code, discordId, discordTag, logger = console,
 } = {}) {
   const normalized = normalizeLinkCode(code);
+  let scoped = inFlightVerifications.get(api);
+  if (!scoped) {
+    scoped = new Map();
+    inFlightVerifications.set(api, scoped);
+  }
+  const key = `${discordId}\u0000${normalized}`;
+  const active = scoped.get(key);
+  if (active) {
+    logger.warn('[link] yinelenen modal teslimi mevcut doğrulamayla birleştirildi');
+    return active;
+  }
+
+  const task = verifyLinkCodeOnce({ api, normalized, discordId, discordTag, logger });
+  const tracked = task.finally(() => {
+    if (scoped.get(key) === tracked) scoped.delete(key);
+  });
+  scoped.set(key, tracked);
+  return tracked;
+}
+
+async function verifyLinkCodeOnce({ api, normalized, discordId, discordTag, logger }) {
 
   // 2) Köprü kapalıyken doğrulama çağrısı YAPILMAZ.
   const bridge = api.bridgeStatus({ requireSingleInstance: false });
@@ -261,7 +289,8 @@ function verificationTargets(bridge) {
   const instances = [...new Set(bridge.instances ?? [])];
   const explicit = instances.filter((id) => id && !id.startsWith('ip:'));
   const hasAnonymous = explicit.length !== instances.length;
-  const duplicateIdentity = bridge.routing?.reason === 'concurrent_pollers';
+  const duplicateIdentity = bridge.routing?.reason === 'concurrent_pollers'
+    || bridge.routing?.reason === 'duplicate_instance';
   if (duplicateIdentity || (hasAnonymous && instances.length > 1)) {
     return {
       ok: false,
