@@ -32,9 +32,18 @@ import { bridgeQueue } from './bridgequeue.js';
  *   bridge_timeout            iş zaman aşımına uğradı
  *   bridge_unreachable        doğrudan HTTP bağlantısı kurulamadı
  *   bad_gateway_response      yanıt JSON değil
+ *
+ * HESAP BAĞLAMA PROTOKOLÜ 2 (plugin 1.2.2)
+ * ----------------------------------------
+ * `/api/link/v2/*` uçları yanıtlayan instance kimliğini (`instance`) ve istek
+ * kimliğini (`requestId`) geri taşır. Yazma uçları (verify/unlink) hedef
+ * instance verilmeden çoklu köprüde gönderilmez.
  */
 
 const TIMEOUT_MS = 8000;
+
+/** Yazma yapan bağlantı işlemleri DB kilidi + dosya kilidi bekleyebilir. */
+export const LINK_WRITE_TIMEOUT_MS = 12_000;
 
 /** Backend'in "bu kod yanlış/süresi dolmuş" dediği TEK kodlar. */
 export const BAD_CODE_ERRORS = Object.freeze(['invalid_code', 'expired_code']);
@@ -56,13 +65,15 @@ export function createMcApi({
   logger = console,
   now = () => Date.now(),
   newId = () => randomUUID().slice(0, 8),
+  readTimeoutMs = TIMEOUT_MS,
+  linkWriteTimeoutMs = LINK_WRITE_TIMEOUT_MS,
 } = {}) {
   /**
    * Köprünün şu anki durumu. `requireSingleInstance` hesap bağlama gibi
    * yan etkili işlemler içindir: köprüde birden fazla plugin varsa iş
    * RASTGELE birine gitmemelidir.
    *
-   * @returns {{ok:boolean, transport:'reverse'|'direct'|'none', errorCode?:string, error?:string, instances?:string[]}}
+   * @returns {{ok:boolean, transport:'reverse'|'direct'|'none', errorCode?:string, error?:string, instances?:string[], instanceMeta?:object[]}}
    */
   function bridgeStatus({ requireSingleInstance = false } = {}) {
     if (queue.pluginConnected()) {
@@ -78,6 +89,7 @@ export function createMcApi({
         };
       })();
       const { instances } = routing;
+      const instanceMeta = queue.instanceMeta?.() ?? null;
       if (requireSingleInstance && routing.ambiguous) {
         // Belirsizlik iki yoldan tespit edilir; ikisi de gerçek bir ikinci
         // plugin sürecine işaret eder (bkz. bridgequeue.js).
@@ -88,6 +100,7 @@ export function createMcApi({
           ok: false,
           transport: 'reverse',
           instances,
+          instanceMeta,
           routing,
           errorCode: 'multiple_plugin_instances',
           error: `Köprüye birden fazla plugin bağlı (${detail}); isteğin hangisine gideceği belirsiz. `
@@ -96,7 +109,7 @@ export function createMcApi({
             + 'her instance\'a ayrı BRIDGE_INSTANCE_ID ver ve yalnız birini bu bota bağla.',
         };
       }
-      return { ok: true, transport: 'reverse', instances, routing };
+      return { ok: true, transport: 'reverse', instances, instanceMeta, routing };
     }
     if (cfg.directFallbackDisabled) {
       return {
@@ -132,6 +145,7 @@ export function createMcApi({
     if (status >= 400) {
       const errorCode = typeof data?.error === 'string' && data.error ? data.error : `http_${status}`;
       return {
+        ...(data && typeof data === 'object' ? data : {}),
         ok: false,
         status,
         errorCode,
@@ -139,7 +153,7 @@ export function createMcApi({
         ...meta,
       };
     }
-    return { ok: true, ...data, ...meta };
+    return { ok: true, status, ...data, ...meta };
   }
 
   /**
@@ -147,13 +161,14 @@ export function createMcApi({
    * içermez: yalnız korelasyon kimliği, taşıma, yol, status, hata kodu ve süre.
    */
   function logResult({
-    correlationId, transport, method, path, status, errorCode, startedAt, claimedBy, pollId,
+    correlationId, transport, method, path, status, errorCode, startedAt, claimedBy, pollId, target,
   }) {
     const ms = now() - startedAt;
     // claimedBy süreç kimliğidir; pollId ise her uzun-yoklamada doğal olarak
     // değişir. İkisini logları ilişkilendirmek için taşıyoruz fakat çoklu
     // plugin kararı yalnız claimedBy/instance sinyaliyle verilebilir.
     const who = [
+      target ? `hedef=${target}` : null,
       claimedBy ? `inst=${claimedBy}` : null,
       pollId ? `poll=${pollId}` : null,
     ].filter(Boolean).join(' ');
@@ -169,7 +184,7 @@ export function createMcApi({
    */
   async function request(path, {
     method = 'GET', body, requireSingleInstance = false, targetInstance = null,
-    timeoutMs = TIMEOUT_MS,
+    timeoutMs = readTimeoutMs,
   } = {}) {
     const correlationId = newId();
     const startedAt = now();
@@ -208,17 +223,21 @@ export function createMcApi({
           startedAt,
           claimedBy: res.claimedBy,
           pollId: res.claimedPollId,
+          target: queueTarget,
         });
         return shaped;
       } catch (err) {
         const errorCode = /zaman aşımı/i.test(err.message) ? 'bridge_timeout' : 'bridge_unreachable';
-        logResult({ correlationId, transport: 'reverse', method, path, errorCode, startedAt });
+        logResult({
+          correlationId, transport: 'reverse', method, path, errorCode, startedAt, target: queueTarget,
+        });
         return {
           ok: false,
           errorCode,
           error: `Minecraft sunucusuna ulaşılamadı (${err.message}).`,
           transport: 'reverse',
           correlationId,
+          target: queueTarget,
         };
       }
     }
@@ -278,6 +297,11 @@ export function createMcApi({
     }
   }
 
+  const query = (params) => Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+
   return {
     request,
     bridgeStatus,
@@ -288,7 +312,7 @@ export function createMcApi({
     ping: () => request('/api/ping'),
     status: () => request('/api/status'),
 
-    /* Account linking — the plugin is the source of truth. */
+    /* Account linking (1.2.1 uyumlu uçlar) — the plugin is the source of truth. */
     linkVerify: (code, discordId, discordTag, { targetInstance = null } = {}) => request('/api/link/verify', {
       method: 'POST',
       body: { code, discordId, discordTag },
@@ -296,12 +320,68 @@ export function createMcApi({
       // koruma sürer ve yan etkili çağrı rastgele poller'a gitmez.
       requireSingleInstance: !targetInstance,
       targetInstance,
+      timeoutMs: linkWriteTimeoutMs,
     }),
-    linkStatus: (query, { targetInstance = null } = {}) => request(`/api/link/status?${query}`, {
+    linkStatus: (queryString, { targetInstance = null } = {}) => request(`/api/link/status?${queryString}`, {
       targetInstance,
     }),
     linkDelete: (type, value) => request('/api/link', {
-      method: 'DELETE', body: { type, value }, requireSingleInstance: true,
+      method: 'DELETE', body: { type, value }, requireSingleInstance: true, timeoutMs: linkWriteTimeoutMs,
+    }),
+
+    /* Hesap bağlama protokolü 2 (plugin 1.2.2). */
+    linkProbe: (code, discordId, { targetInstance = null, requestId = null } = {}) => request('/api/link/v2/probe', {
+      method: 'POST',
+      body: { code, ...(discordId ? { discordId } : {}), ...(requestId ? { requestId } : {}) },
+      targetInstance,
+    }),
+    linkVerifyV2: ({
+      code, discordId, discordTag, requestId,
+    }, { targetInstance = null } = {}) => request('/api/link/v2/verify', {
+      method: 'POST',
+      body: {
+        code, discordId, discordTag, requestId,
+      },
+      requireSingleInstance: !targetInstance,
+      targetInstance,
+      timeoutMs: linkWriteTimeoutMs,
+    }),
+    linkOperation: (requestId, { targetInstance = null } = {}) => request(
+      `/api/link/v2/operation?${query({ requestId })}`,
+      { targetInstance },
+    ),
+    /** selector: 'uuid' | 'discord' | 'name' */
+    linkInfo: (selector, value, { targetInstance = null } = {}) => request(
+      `/api/link/v2/info?${query({ [selector]: value })}`,
+      { targetInstance },
+    ),
+    linkList: ({ offset = 0, limit = 10 } = {}, { targetInstance = null } = {}) => request(
+      `/api/link/v2/list?${query({ offset, limit })}`,
+      { targetInstance },
+    ),
+    linkHistory: ({
+      uuid, discordId, limit = 10, beforeId,
+    } = {}, { targetInstance = null } = {}) => request(
+      `/api/link/v2/history?${query({
+        uuid, discord: discordId, limit, beforeId,
+      })}`,
+      { targetInstance },
+    ),
+    linkUnlinkV2: ({
+      selector, value, expectedLinkId = null, reason = null, actor, requestId,
+    }, { targetInstance = null } = {}) => request('/api/link/v2/unlink', {
+      method: 'POST',
+      body: {
+        selector,
+        value,
+        ...(expectedLinkId ? { expectedLinkId } : {}),
+        ...(reason ? { reason } : {}),
+        actor,
+        requestId,
+      },
+      requireSingleInstance: !targetInstance,
+      targetInstance,
+      timeoutMs: linkWriteTimeoutMs,
     }),
 
     /* Minecraft moderation. */
@@ -321,7 +401,7 @@ export function createMcApi({
     schedule: () => request('/api/schedule'),
 
     /* Lifetime stats & profile. */
-    statsPlayer: (query) => request(`/api/stats/player?${query}`),
+    statsPlayer: (queryString) => request(`/api/stats/player?${queryString}`),
     statsTop: (by = 'elo', limit = 10) => request(
       `/api/stats/top?by=${encodeURIComponent(by)}&limit=${limit}`,
     ),

@@ -225,6 +225,38 @@ const MIGRATIONS = [
     );
     CREATE INDEX IF NOT EXISTS idx_user_notes_user ON user_notes(user_id);`,
   },
+  {
+    version: 5,
+    // Hesap bağlama yan işlemleri (audit/log/rol) için kalıcı, sınırlı yeniden
+    // denemeli kuyruk ve yönetim paneli durumları. Ham bağlantı kodu saklanmaz.
+    sql: `CREATE TABLE IF NOT EXISTS link_side_effects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      effect_key TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      note TEXT,
+      next_attempt_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_side_effects_due ON link_side_effects(status, next_attempt_at);
+    CREATE TABLE IF NOT EXISTS link_admin_panels (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      instance_id TEXT,
+      uuid TEXT NOT NULL,
+      discord_id TEXT NOT NULL,
+      link_id TEXT NOT NULL,
+      mc_name TEXT,
+      reason TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER
+    );`,
+  },
 ];
 
 {
@@ -241,6 +273,61 @@ const MIGRATIONS = [
     console.log(`[db] migration v${m.version} uygulandı`);
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Hesap bağlama yan işlemleri (outbox) ve yönetim panelleri            */
+/* ------------------------------------------------------------------ */
+
+export const linkSideEffects = {
+  /** Aynı effect_key ikinci kez eklenmez (işlem başına bir kez). true = yeni kayıt. */
+  enqueue: ({ key, kind, payload, at = Date.now() }) =>
+    db.prepare(`INSERT OR IGNORE INTO link_side_effects
+      (effect_key, kind, payload, status, attempts, next_attempt_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`)
+      .run(key, kind, JSON.stringify(payload ?? {}), at, at, at).changes > 0,
+  due: (at = Date.now(), limit = 20) =>
+    db.prepare(`SELECT * FROM link_side_effects WHERE status = 'pending' AND next_attempt_at <= ?
+      ORDER BY next_attempt_at, id LIMIT ?`).all(at, limit),
+  get: (key) => db.prepare('SELECT * FROM link_side_effects WHERE effect_key = ?').get(key),
+  markDone: (id, at = Date.now(), note = null) =>
+    db.prepare(`UPDATE link_side_effects SET status = 'done', note = ?, last_error = NULL, updated_at = ?
+      WHERE id = ?`).run(note, at, id),
+  markRetry: (id, attempts, error, nextAt, at = Date.now()) =>
+    db.prepare(`UPDATE link_side_effects SET attempts = ?, last_error = ?, next_attempt_at = ?, updated_at = ?
+      WHERE id = ?`).run(attempts, error, nextAt, at, id),
+  markFailed: (id, attempts, error, at = Date.now()) =>
+    db.prepare(`UPDATE link_side_effects SET status = 'failed', attempts = ?, last_error = ?, updated_at = ?
+      WHERE id = ?`).run(attempts, error, at, id),
+  counts: () => Object.fromEntries(
+    db.prepare('SELECT status, COUNT(*) AS n FROM link_side_effects GROUP BY status').all()
+      .map((r) => [r.status, r.n]),
+  ),
+  recentProblems: (limit = 5) =>
+    db.prepare(`SELECT kind, effect_key, status, attempts, last_error, updated_at FROM link_side_effects
+      WHERE last_error IS NOT NULL AND status != 'done' ORDER BY updated_at DESC LIMIT ?`).all(limit),
+  /** Yetkili isteğiyle kalıcı başarısız kaydı yeniden kuyruğa al. */
+  retryFailed: (key, at = Date.now()) =>
+    db.prepare(`UPDATE link_side_effects SET status = 'pending', attempts = 0, next_attempt_at = ?, updated_at = ?
+      WHERE effect_key = ? AND status = 'failed'`).run(at, at, key).changes > 0,
+};
+
+export const linkAdminPanels = {
+  create: ({
+    id, ownerId, instanceId = null, uuid, discordId, linkId, mcName = null, reason = null,
+    at = Date.now(), ttlMs = 15 * 60_000,
+  }) => db.prepare(`INSERT INTO link_admin_panels
+      (id, owner_id, instance_id, uuid, discord_id, link_id, mc_name, reason, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, ownerId, instanceId, uuid, discordId, linkId, mcName, reason, at, at + ttlMs),
+  get: (id) => db.prepare('SELECT * FROM link_admin_panels WHERE id = ?').get(id),
+  setReason: (id, reason) =>
+    db.prepare('UPDATE link_admin_panels SET reason = ? WHERE id = ? AND used_at IS NULL').run(reason, id),
+  /** Tek kullanımlık: yalnız ilk onay true döner. */
+  markUsed: (id, at = Date.now()) =>
+    db.prepare('UPDATE link_admin_panels SET used_at = ? WHERE id = ? AND used_at IS NULL').run(at, id).changes > 0,
+  prune: (at = Date.now()) =>
+    db.prepare('DELETE FROM link_admin_panels WHERE expires_at < ?').run(at - 24 * 3600_000).changes,
+};
 
 /* ------------------------------------------------------------------ */
 /* Settings                                                            */

@@ -168,3 +168,38 @@ test('syncMemberTierRole: eşleme yokken kurulum hatası döner', async () => {
   assert.equal(res.ok, false);
   assert.match(res.error, /rolkur/);
 });
+
+/* ---------------- toplu senkron veri kaynağı ---------------- */
+
+test('collectTierLinks: plugin 1.2.2 tek sunucuda tier UUID üzerinden, sayfa sayfa okunur', async () => {
+  const { collectTierLinks } = await import('../src/rolesync.js');
+  const pages = [];
+  const api = {
+    bridgeStatus: () => ({ ok: true, transport: 'reverse', instanceMeta: [{ id: 'mc-live', linkProtocol: 2 }] }),
+    linkList: async ({ offset }, { targetInstance }) => {
+      pages.push([offset, targetInstance]);
+      const all = Array.from({ length: 30 }, (_, i) => ({
+        uuid: `u${i}`, discordId: `4000000000000000${String(i).padStart(2, '0')}`, tier: i % 2 ? 'Altın' : null,
+      }));
+      return { ok: true, total: all.length, links: all.slice(offset, offset + 25) };
+    },
+    links: async () => assert.fail('ada göre eşleyen eski uç kullanılmamalı'),
+  };
+  const res = await collectTierLinks(api);
+  assert.equal(res.ok, true);
+  assert.equal(res.source, 'uuid');
+  assert.deepEqual(pages, [[0, 'mc-live'], [25, 'mc-live']]);
+  assert.equal(res.links.length, 15, 'tier bilgisi olmayanlar atlanır');
+  assert.equal(typeof res.links[0].discordId, 'string');
+});
+
+test('collectTierLinks: eski plugin ya da çoklu sunucuda eski uca düşer', async () => {
+  const { collectTierLinks } = await import('../src/rolesync.js');
+  const api = {
+    bridgeStatus: () => ({ ok: true, transport: 'reverse', instanceMeta: [{ id: 'mc-eski', linkProtocol: 0 }] }),
+    links: async () => ({ ok: true, links: [{ discordId: '1', tier: 'Demir' }, { discordId: '2' }] }),
+  };
+  const res = await collectTierLinks(api);
+  assert.equal(res.source, 'legacy');
+  assert.deepEqual(res.links, [{ discordId: '1', tier: 'Demir' }]);
+});

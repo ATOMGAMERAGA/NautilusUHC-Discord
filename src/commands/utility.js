@@ -52,7 +52,8 @@ const HELP_GROUPS = [
     name: '🛡️ Mod',
     value: '`/uyar` `/mute` `/unmute` `/kick` `/nick` `/not ekle`\n'
       + '`/sil` `/kilit` `/yavaşmod` `/çekiliş`\n'
-      + '`/mcmute` `/mcunmute` `/mckick` `/mcuyar` `/mcsicil` `/mcbanlist` `/mcmutelist`',
+      + '`/mcmute` `/mcunmute` `/mckick` `/mcuyar` `/mcsicil` `/mcbanlist` `/mcmutelist`\n'
+      + '`/linkler` `/linkbilgi` `/linkgecmisi` — hesap bağlantılarını incele',
   },
   {
     min: Tier.BMOD,
@@ -63,7 +64,8 @@ const HELP_GROUPS = [
   {
     min: Tier.ADMIN,
     name: '👑 Admin',
-    value: '`/rolver` `/rolal` `/duyuru` `/embed` `/kayıtsil`\n'
+    value: '`/rolver` `/rolal` `/duyuru` `/embed`\n'
+      + '`/unlink` — hesap bağlantısını onayla kaldır (`/kayıtsil` eski kısayol)\n'
       + '`/admin` — kanal, koruma, destek, rol ve ELO ayarları',
   },
 ];
@@ -105,7 +107,8 @@ const MC_COMMAND_GROUPS = [
       + '`/ban` `/tempban` `/unban` · `/mute` `/tempmute` `/unmute` · `/kick`\n'
       + '`/warn` `/unwarn` `/warns` · `/banlist` `/mutelist`\n'
       + '`/sicil <oyuncu>` — Kalıcı ceza geçmişi (alias: `/gecmis`)\n'
-      + '`/freeze` `/vanish` `/mutechat` `/reports` · `/unlink <mc|dc>`',
+      + '`/freeze` `/vanish` `/mutechat` `/reports`\n'
+      + '`/unlink <oyuncu> [sebep]` · `/unlink <mc|dc|uuid> <değer>` — bağlantıyı kaldır',
   },
   {
     name: '🧰 Yetkili Araçları',

@@ -247,3 +247,29 @@ test('/health hâlâ çalışıyor', async () => {
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true, bot: true });
 });
+
+/* ------------------------------------------------------------------ */
+/* Hesap bağlama protokolü ve sonuç eşleşmesi (HTTP)                   */
+/* ------------------------------------------------------------------ */
+
+test('yoklama: X-Bridge-Link-Protocol başlığı instance başına kaydedilir', async () => {
+  bridgeQueue.reset();
+  await poll(0, { ...sign(''), 'X-Bridge-Link-Protocol': '2' }, 'mc-yeni');
+  assert.deepEqual(bridgeQueue.instanceMeta().map((m) => [m.id, m.linkProtocol]), [['mc-yeni', 2]]);
+});
+
+test('sonuç: zaman aşımına uğramış işin geç gelen sonucu late olarak işaretlenir', async () => {
+  bridgeQueue.reset();
+  const pending = bridgeQueue.enqueue({ method: 'POST', path: '/api/link/v2/verify', targetInstance: 'mc-canli' }, 200)
+    .catch((err) => err);
+  const { jobs } = await (await poll(1000, null, 'mc-canli')).json();
+  assert.ok((await pending) instanceof Error, 'ön koşul: iş zaman aşımına uğramalı');
+  const raw = JSON.stringify({ jobId: jobs[0].jobId, status: 200, data: { result: 'linked' } });
+  const res = await fetch(`${base}/api/bridge/jobs/result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...sign(raw), 'X-Bridge-Instance': 'mc-canli' },
+    body: raw,
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, unknown: true, late: true });
+});

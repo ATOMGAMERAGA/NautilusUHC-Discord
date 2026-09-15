@@ -513,13 +513,15 @@ export function createRequestHandler(client, hooks = {}) {
         ? Math.min(asked, MAX_POLL_WAIT_MS)
         : MAX_POLL_WAIT_MS;
       const instanceId = pollInstanceId(req, url, ip);
+      // Plugin 1.2.2 hesap bağlama protokolünü bildirir; eski pluginler 0 sayılır.
+      const linkProtocol = Number.parseInt(String(req.headers['x-bridge-link-protocol'] ?? '0'), 10) || 0;
       // Plugin yeniden başlar ya da ağ koparsa bağlantı kapanır; yoklamayı
       // kuyruktan hemen düşürmek için iptal sinyali veriyoruz. Terk edilmiş
       // yoklamaların açık sayılması "birden fazla plugin" yanlış pozitifine
       // yol açardı (bkz. bridgequeue.js).
       const aborter = new AbortController();
       req.on('close', () => aborter.abort());
-      return bridgeQueue.takeJobs(wait, { instanceId, signal: aborter.signal })
+      return bridgeQueue.takeJobs(wait, { instanceId, signal: aborter.signal, linkProtocol })
         .then((jobs) => {
           if (aborter.signal.aborted) return undefined; // istemci gitti
           return respond(200, { ok: true, jobs, instanceId });
@@ -540,10 +542,22 @@ export function createRequestHandler(client, hooks = {}) {
         } catch {
           return respond(400, { ok: false, error: 'bad_json' });
         }
+        const sender = pollInstanceId(req, url, ip);
+        const outcome = bridgeQueue.completeJobFrom(payload.jobId, payload.status, payload.data, sender);
+        if (outcome === 'wrong_instance') {
+          // İş başka bir instance'a teslim edilmişti: bu sonuç bekleyeni ÇÖZMEZ.
+          console.warn(`[bridge] iş sonucu hedef dışı instance'tan geldi, reddedildi (iş=${payload.jobId} gönderen=${sender})`);
+          return respond(409, { ok: false, error: 'wrong_instance' });
+        }
+        if (outcome === 'late') {
+          const info = bridgeQueue.lateResultInfo(payload.jobId);
+          console.warn(`[bridge] zaman aşımına uğramış işin sonucu geç geldi (iş=${payload.jobId} yol=${info?.path ?? '-'}`
+            + ` hedef=${info?.targetInstance ?? '-'} alan=${info?.claimedBy ?? '-'} gönderen=${sender} status=${payload.status})`);
+          return respond(200, { ok: true, unknown: true, late: true });
+        }
         // İş bilinmiyorsa (zaman aşımına uğramış) 200 döneriz: plugin'in bunu
         // tekrar denemesinin bir anlamı yok, çağıran taraf çoktan vazgeçti.
-        const known = bridgeQueue.completeJob(payload.jobId, payload.status, payload.data);
-        return respond(200, { ok: true, unknown: !known });
+        return respond(200, { ok: true, unknown: outcome !== 'completed' });
       });
     }
 

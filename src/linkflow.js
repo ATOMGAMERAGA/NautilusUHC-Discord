@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { mcapi as defaultApi, BAD_CODE_ERRORS } from './mcapi.js';
+import { planLinkTargets, LINK_PROTOCOL } from './linkrouting.js';
 
 /**
  * HESAP BAĞLAMA AKIŞI — saf karar katmanı.
@@ -7,24 +9,18 @@ import { mcapi as defaultApi, BAD_CODE_ERRORS } from './mcapi.js';
  * ne saklar. Burada yalnız "plugin ne dedi → kullanıcıya ne gösterilir"
  * kararı verilir. Discord'a hiç bağımlı olmadığı için uçtan uca test edilebilir.
  *
- * KÖK NEDEN (bu modülün var oluş sebebi)
- * --------------------------------------
- * Eskiden components.js şöyle karar veriyordu:
- *
- *     const badCode = res.status === 404 || res.status === 400 || /invalid|…/
- *
- * Yani HTTP status'una bakıp "kod geçersiz" diyordu. Oysa 404, çok daha sık
- * olarak isteğin plugin'e HİÇ ULAŞMADIĞI anlamına gelir:
- *   - MC_API_URL botun kendi adresini gösteriyor → botun kendi HTTP sunucusu
- *     `/api/link/verify`'i tanımaz, `404 {"error":"not_found"}` döner;
- *   - yanlış host/port/ters vekil → 404 ya da başka bir servisin cevabı;
- *   - eksik alan → `400 {"error":"missing_fields"}` (entegrasyon hatası).
- * Hepsi oyuncuya "kodun geçersiz" diye gösteriliyor, oyuncu da defalarca yeni
- * kod alıp aynı duvara toslıyordu.
- *
- * Kural: "kod geçersiz/süresi dolmuş" YALNIZCA backend'in açıkça
- * `invalid_code` / `expired_code` demesiyle gösterilir. Başka her şey köprü
- * veya yapılandırma hatasıdır ve öyle söylenir.
+ * KURALLAR
+ * --------
+ *  - "Kod geçersiz/süresi dolmuş" YALNIZCA backend açıkça `invalid_code` /
+ *    `expired_code` dediğinde gösterilir. HTTP 400/404, zaman aşımı, DB hatası
+ *    ve köprü hataları kendi adıyla anlatılır.
+ *  - Kod yalnız onu üreten depoya gönderilir (bkz. linkrouting.js). Çoklu
+ *    depoda sahiplik salt-okunur yoklamayla TEK sahip çıkmadıkça hiçbir yere
+ *    yazma isteği gönderilmez; "ilk başarı veren instance" seçimi yoktur.
+ *  - Sonucu belirsiz kalan yazma (zaman aşımı/5xx) başka instance'ta denenmez;
+ *    aynı instance'ta aynı requestId ile uzlaştırılır.
+ *  - Başarı ancak doğrulama yanıtı ve ardından okunan kayıt AYNI UUID–Discord
+ *    çiftini (ve link sürümünü) gösterirse başarı sayılır.
  */
 
 /** Backend'in "bu kod yanlış/süresi dolmuş" dediği tek kodlar. */
@@ -34,7 +30,9 @@ export const BAD_CODE_ERROR_CODES = new Set(BAD_CODE_ERRORS);
 const ALREADY_LINKED_CODES = new Set(['already_linked', 'discord_already_linked', 'conflict']);
 
 /** Bot ↔ plugin sözleşmesinin tutmadığını gösteren kodlar. */
-const CONTRACT_CODES = new Set(['missing_fields', 'bad_request', 'invalid_request', 'bad_json']);
+const CONTRACT_CODES = new Set([
+  'missing_fields', 'bad_request', 'invalid_request', 'bad_json', 'invalid_discord_id', 'invalid_request_id',
+]);
 
 /** İsteğin hiç doğru uca/servise varmadığını gösteren kodlar. */
 const ROUTING_CODES = new Set(['not_found', 'no_route', 'unknown_endpoint', 'method_not_allowed']);
@@ -42,9 +40,46 @@ const ROUTING_CODES = new Set(['not_found', 'no_route', 'unknown_endpoint', 'met
 /** Yetkilendirme/paylaşılan sır uyuşmazlığı. */
 const AUTH_CODES = new Set(['unauthorized', 'forbidden', 'invalid_token', 'bad_signature']);
 
+/** Sonucu belirsiz bırakan (commit olmuş olabilir) yanıtlar. */
+const UNCERTAIN_CODES = new Set([
+  'bridge_timeout', 'bridge_unreachable', 'bad_gateway_response', 'store_unavailable', 'internal_error',
+  'local_bridge_unreachable',
+]);
+
 /** Kod normalizasyonu — modal girdisi her zaman böyle temizlenir. */
 export function normalizeLinkCode(raw) {
   return String(raw ?? '').trim().toUpperCase();
+}
+
+/** Aynı Discord hesabı için kısa sürede kabul edilen en fazla hatalı kod. */
+export const FAILED_ATTEMPT_LIMIT = 8;
+const FAILED_ATTEMPT_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Hatalı kod denemesi sınırlayıcı (tahmin saldırısına karşı ek katman).
+ * Güvenlik kararı değildir; asıl doğrulama plugin deposundadır.
+ */
+export function createAttemptLimiter({
+  limit = FAILED_ATTEMPT_LIMIT, windowMs = FAILED_ATTEMPT_WINDOW_MS, now = Date.now,
+} = {}) {
+  const buckets = new Map();
+  const recent = (key) => (buckets.get(key) ?? []).filter((t) => now() - t < windowMs);
+  return {
+    blocked(key) {
+      const list = recent(key);
+      if (list.length) buckets.set(key, list);
+      else buckets.delete(key);
+      return list.length >= limit;
+    },
+    record(key) {
+      const list = recent(key);
+      list.push(now());
+      buckets.set(key, list);
+    },
+    clear(key) {
+      buckets.delete(key);
+    },
+  };
 }
 
 /**
@@ -53,6 +88,7 @@ export function normalizeLinkCode(raw) {
  * tekrarlarını da güvenli biçimde idempotent yapar.
  */
 const inFlightVerifications = new WeakMap();
+const limiters = new WeakMap();
 
 const YETKILIYE = 'Bu bir kod hatası değildir; lütfen bir yetkiliye bildir.';
 
@@ -74,6 +110,24 @@ export function classifyLinkFailure(res = {}) {
       title: 'Kod Doğrulanamadı',
       description: 'Girdiğin kod geçersiz veya süresi dolmuş.\n'
         + 'Minecraft sunucusunda `/link` yazarak yeni bir kod al ve tekrar dene.',
+    };
+  }
+  if (errorCode === 'too_many_attempts') {
+    return {
+      kind: 'too_many_attempts',
+      errorCode,
+      title: 'Çok Fazla Hatalı Deneme',
+      description: 'Kısa sürede çok fazla hatalı kod girildi.\n'
+        + 'Birkaç dakika bekle, sonra Minecraft\'ta `/link` ile aldığın güncel kodu gir.',
+    };
+  }
+  if (errorCode === 'code_conflict') {
+    return {
+      kind: 'code_conflict',
+      errorCode,
+      title: 'Kod Birden Fazla Sunucuda Bulundu',
+      description: 'Bu kod birden fazla Minecraft sunucusunda bekliyor. Hesabın yanlış kişiyle '
+        + 'eşleşmemesi için işlem yapılmadı.\nMinecraft\'ta `/link` yazarak yeni bir kod al ve tekrar dene.',
     };
   }
   if (status === 409 || ALREADY_LINKED_CODES.has(errorCode)) {
@@ -109,6 +163,42 @@ export function classifyLinkFailure(res = {}) {
       title: 'Birden Fazla Sunucu Bağlı',
       description: 'Köprüye birden fazla Minecraft sunucusu bağlı; doğrulama isteğinin hangisine '
         + `gideceği belirsiz olduğu için gönderilmedi.\n${YETKILIYE}`,
+    };
+  }
+  if (errorCode === 'wrong_instance' || errorCode === 'verification_mismatch') {
+    return {
+      kind: 'verification_mismatch',
+      errorCode,
+      title: 'Doğrulama Tutarsız',
+      description: 'Minecraft sunucusundan gelen yanıt beklenen hesap ya da sunucuyla eşleşmedi; '
+        + `bu yüzden işlem başarılı sayılmadı.\n${YETKILIYE}`,
+    };
+  }
+  if (errorCode === 'state_changed') {
+    return {
+      kind: 'state_changed',
+      errorCode,
+      title: 'Bağlantı Değişti',
+      description: 'İşlem sırasında hesap bağlantın değişti; güncel durum başarıyı doğrulamıyor.\n'
+        + 'Discord\'da `/link` ile durumunu kontrol et.',
+    };
+  }
+  if (errorCode === 'unconfirmed') {
+    return {
+      kind: 'unconfirmed',
+      errorCode,
+      title: 'Sonuç Doğrulanamadı',
+      description: 'İsteğin Minecraft sunucusuna ulaştı ancak sonucu doğrulanamadı.\n'
+        + 'Birkaç saniye sonra Discord\'da `/link` ile durumunu kontrol et; bağlı değilse aynı kodla tekrar dene.',
+    };
+  }
+  if (errorCode === 'store_unavailable') {
+    return {
+      kind: 'store_unavailable',
+      errorCode,
+      title: 'Bağlantı Kayıtlarına Ulaşılamadı',
+      description: 'Minecraft sunucusu bağlantı kayıtlarına şu anda erişemiyor.\n'
+        + 'Kodun geçersiz olduğu anlamına gelmez; birkaç dakika sonra tekrar dene.',
     };
   }
   if (ROUTING_CODES.has(errorCode) || status === 404 || errorCode === 'http_404') {
@@ -178,34 +268,58 @@ export function classifyLinkFailure(res = {}) {
 
 /**
  * Modal akışının tamamı. Discord'dan bağımsızdır: girdi kod + kimlik, çıktı
- * karar nesnesi. Çağıran (components.js) yalnız kararı embed'e çevirir.
+ * karar nesnesi. Çağıran yalnız kararı embed'e çevirir.
  *
- * Sıra:
- *   1. Kodu normalize et (trim + upper).
- *   2. Köprü durumunu ve hedeflenebilir instance'ları belirle.
- *   3. Tek instance'ta mevcut bağlantıyı sor.
- *   4. Kodu her açık instance'a AYRI HEDEFLİ istekle doğrulat. Ancak hepsi
- *      açıkça invalid/expired derse kullanıcıya kod hatası göster.
- *
- * @returns {Promise<{outcome:'linked'|'already_linked_self'|'failed', mc?:string, failure?:object, correlationId?:string}>}
+ * @returns {Promise<{outcome:'linked'|'failed', created?:boolean, replay?:boolean, mc?:string, link?:object, instance?:string|null, requestId:string, failure?:object, correlationId?:string}>}
  */
 export function verifyLinkCode({
   api = defaultApi, code, discordId, discordTag, logger = console,
+  sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  retryDelayMs = 1500, reconcileAttempts = 3, readbackAttempts = 2, limiter = null,
 } = {}) {
   const normalized = normalizeLinkCode(code);
+  const id = String(discordId ?? '');
   let scoped = inFlightVerifications.get(api);
   if (!scoped) {
     scoped = new Map();
     inFlightVerifications.set(api, scoped);
   }
-  const key = `${discordId}\u0000${normalized}`;
+  const key = `${id} ${normalized}`;
   const active = scoped.get(key);
   if (active) {
     logger.warn('[link] yinelenen modal teslimi mevcut doğrulamayla birleştirildi');
     return active;
   }
 
-  const task = verifyLinkCodeOnce({ api, normalized, discordId, discordTag, logger });
+  let attempts = limiter;
+  if (!attempts) {
+    attempts = limiters.get(api);
+    if (!attempts) {
+      attempts = createAttemptLimiter();
+      limiters.set(api, attempts);
+    }
+  }
+  const context = {
+    api,
+    normalized,
+    discordId: id,
+    discordTag,
+    logger,
+    sleep,
+    retryDelayMs,
+    reconcileAttempts,
+    readbackAttempts,
+    requestId: randomUUID(),
+  };
+  const task = (async () => {
+    if (attempts.blocked(id)) {
+      return failed(context, 'guard', null, classifyLinkFailure({ errorCode: 'too_many_attempts' }));
+    }
+    const decision = await verifyLinkCodeOnce(context);
+    if (decision.outcome === 'failed' && decision.failure?.kind === 'bad_code') attempts.record(id);
+    if (decision.outcome === 'linked') attempts.clear(id);
+    return decision;
+  })();
   const tracked = task.finally(() => {
     if (scoped.get(key) === tracked) scoped.delete(key);
   });
@@ -213,95 +327,205 @@ export function verifyLinkCode({
   return tracked;
 }
 
-async function verifyLinkCodeOnce({ api, normalized, discordId, discordTag, logger }) {
+async function verifyLinkCodeOnce(context) {
+  const { api, normalized, logger } = context;
 
-  // 2) Köprü kapalıyken doğrulama çağrısı YAPILMAZ.
+  // Köprü kapalıyken doğrulama çağrısı YAPILMAZ.
   const bridge = api.bridgeStatus({ requireSingleInstance: false });
   if (!bridge.ok) {
-    logger.warn(`[link] doğrulama gönderilmedi: ${bridge.errorCode} — ${bridge.error}`);
-    return { outcome: 'failed', failure: classifyLinkFailure(bridge) };
+    logger.warn(`[link] rid=${context.requestId} doğrulama gönderilmedi: ${bridge.errorCode} — ${bridge.error}`);
+    return failed(context, 'bridge', null, classifyLinkFailure(bridge));
   }
 
-  const plan = verificationTargets(bridge);
+  const plan = planLinkTargets(bridge, normalized);
   if (!plan.ok) {
-    logger.warn(`[link] doğrulama gönderilmedi: ${plan.errorCode} — ${plan.error}`);
-    return { outcome: 'failed', failure: classifyLinkFailure(plan) };
+    logger.warn(`[link] rid=${context.requestId} doğrulama gönderilmedi: ${plan.errorCode} — ${plan.error}`);
+    return failed(context, 'plan', null, classifyLinkFailure(plan), {}, bridgeSnapshot(api));
   }
 
-  // Tek hedefte mevcut "zaten bağlı" davranışını koru. Birden fazla hedefte
-  // gereksiz N adet ön sorgu yerine atomik verify yanıtındaki 409 kullanılır.
-  let status = null;
-  if (plan.targets.length === 1) {
-    const targetInstance = plan.targets[0];
-    status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance });
-    if (status.ok && status.linked) {
-      return { outcome: 'already_linked_self', mc: status.mc, correlationId: status.correlationId };
-    }
+  let target = plan.targets[0];
+  if (plan.mode === 'probe') {
+    const probed = await probeTargets(context, plan.targets);
+    if (!probed.target) return probed.decision;
+    target = probed.target;
   }
-
-  // 4) Instance kimlikleri açık olduğunda yanlış sunucudaki invalid_code son
-  // karar değildir. Her hedef ayrı denenir; başarı ilk bulunduğu yerde biter.
-  let lastBadCode = null;
-  let firstInfrastructureFailure = null;
-  for (const targetInstance of plan.targets) {
-    const res = await api.linkVerify(normalized, discordId, discordTag, { targetInstance });
-    if (res.ok) {
-      return { outcome: 'linked', mc: res.mc, correlationId: res.correlationId };
-    }
-    const failure = classifyLinkFailure(res);
-    if (failure.kind === 'already_linked_other') {
-      return { outcome: 'failed', failure, correlationId: res.correlationId };
-    }
-    if (failure.kind === 'bad_code') lastBadCode = { failure, res };
-    else if (!firstInfrastructureFailure) firstInfrastructureFailure = { failure, res };
+  if (bridge.transport !== 'reverse' || target.linkProtocol < LINK_PROTOCOL) {
+    return legacyCommit(context, target);
   }
+  return v2Commit(context, target);
+}
 
-  // Bir hedef timeout/route/auth hatası verdiyse "tüm instance'lar kodu açıkça
-  // reddetti" diyemeyiz. Sahte invalid_code yerine o altyapı hatasını göster.
-  const final = firstInfrastructureFailure ?? lastBadCode;
-  const failure = final?.failure ?? classifyLinkFailure({});
-  const res = final?.res ?? {};
-  logger.warn(`[link] doğrulama başarısız (${failure.kind}/${failure.errorCode})`
-    + ` status=${res.status ?? '-'} transport=${res.transport ?? '-'} cid=${res.correlationId ?? '-'}`
-    + ` targets=${plan.targets.length} ${bridgeSnapshot(api)}`);
-
-  // pollId her ardışık uzun-yoklamada değişir; süreç karşılaştırması claimedBy
-  // ile yapılır. Yalnız süreç kimliği gerçekten farklıysa teşhis alarmı ver.
-  if (failure.kind === 'bad_code' && status?.claimedBy && res.claimedBy
-      && status.claimedBy !== res.claimedBy) {
-    logger.error('[link] DİKKAT: sorgu ve doğrulama FARKLI plugin instance\'larına gitti'
-      + ` (${status.claimedBy} ≠ ${res.claimedBy}). Köprüye birden fazla Minecraft sunucusu bağlıysa`
-      + ' kodu üretmeyen sunucu doğrulamayı reddeder ve oyuncu doğru kodu girdiği hâlde'
-      + ' "kod geçersiz" görür. Fazladan sunucuyu/konteyneri kapat ya da her instance\'a'
-      + ' ayrı BRIDGE_INSTANCE_ID ver.');
-  }
-  return { outcome: 'failed', failure, correlationId: res.correlationId };
+/** Yanıt gerçekten hedeflenen instance'tan mı geldi? (Eski pluginlerde kimlik yok.) */
+function fromTarget(res, targetId) {
+  if (!targetId) return true;
+  if (res.claimedBy && res.claimedBy !== targetId) return false;
+  return res.instance === undefined || res.instance === targetId;
 }
 
 /**
- * Reverse bridge hedef planı. Yeni pluginler süreç başına açık bir instance
- * kimliği gönderir; birden fazlaysa hepsini ayrı ayrı güvenle deneyebiliriz.
- * Aynı/anonim kimliğin arkasında iki eşzamanlı poller varsa hedef seçilemez.
+ * Kapsamsız kod ya da aynı kapsamda birden fazla instance: salt-okunur yoklama.
+ * Tam olarak bir sahip ve hiç çözülemeyen instance yoksa hedef döner.
  */
-function verificationTargets(bridge) {
-  if (bridge.transport !== 'reverse') return { ok: true, targets: [null] };
+async function probeTargets(context, targets) {
+  const { api, normalized, discordId, requestId } = context;
+  const results = await Promise.all(targets.map((target) => api.linkProbe(normalized, discordId, {
+    targetInstance: target.id, requestId,
+  })));
+  const holders = [];
+  let expired = false;
+  let unresolved = null;
+  results.forEach((res, index) => {
+    const target = targets[index];
+    if (!res.ok || !fromTarget(res, target.id)) {
+      unresolved ??= { target, res: res.ok ? { ...res, ok: false, errorCode: 'wrong_instance' } : res };
+      return;
+    }
+    if (res.holder === true) holders.push(target);
+    else if (res.expired === true) expired = true;
+  });
 
-  const instances = [...new Set(bridge.instances ?? [])];
-  const explicit = instances.filter((id) => id && !id.startsWith('ip:'));
-  const hasAnonymous = explicit.length !== instances.length;
-  const duplicateIdentity = bridge.routing?.reason === 'concurrent_pollers'
-    || bridge.routing?.reason === 'duplicate_instance';
-  if (duplicateIdentity || (hasAnonymous && instances.length > 1)) {
+  if (holders.length > 1) {
+    context.logger.error(`[link] rid=${requestId} aynı kod ${holders.length} bağımsız depoda bulundu `
+      + `(${holders.map((h) => h.id).join(', ')}); hiçbir yere yazılmadı`);
+    return { decision: failed(context, 'probe', null, classifyLinkFailure({ errorCode: 'code_conflict' })) };
+  }
+  if (unresolved) {
+    // Yanıt vermeyen bir depo da aynı kodu tutuyor olabilir: tek sahip kanıtlanamaz.
     return {
-      ok: false,
-      transport: 'reverse',
-      errorCode: 'multiple_plugin_instances',
-      error: 'Birden fazla uzun-yoklama aynı/anonim kimlikle bağlı; doğrulama güvenle hedeflenemiyor. '
-        + 'Her Minecraft sunucusunda farklı bridge.instance-id kullan.',
+      decision: failed(context, 'probe', unresolved.target.id, classifyLinkFailure(unresolved.res), unresolved.res),
     };
   }
+  if (holders.length === 1) return { target: holders[0] };
+  const errorCode = expired ? 'expired_code' : 'invalid_code';
+  return { decision: failed(context, 'probe', null, classifyLinkFailure({ errorCode })) };
+}
 
-  return { ok: true, targets: explicit.length ? explicit : [null] };
+async function v2Commit(context, target) {
+  const {
+    api, normalized, discordId, discordTag, requestId,
+  } = context;
+  const res = await api.linkVerifyV2({
+    code: normalized, discordId, discordTag, requestId,
+  }, { targetInstance: target.id });
+
+  if (res.ok) {
+    if (!fromTarget(res, target.id)) {
+      return failed(context, 'commit', target.id, classifyLinkFailure({ errorCode: 'wrong_instance' }), res);
+    }
+    return confirmLinked(context, target, res);
+  }
+  if (res.errorCode === 'wrong_instance' || !fromTarget(res, target.id)) {
+    return failed(context, 'commit', target.id, classifyLinkFailure({ errorCode: 'wrong_instance' }), res);
+  }
+  if (UNCERTAIN_CODES.has(res.errorCode) || Number(res.status) >= 500) {
+    // İşlem commit olmuş olabilir. Başka instance'a yazma YOK; aynı işlemi uzlaştır.
+    const settled = await reconcileOperation(context, target);
+    if (settled) return settled;
+    return failed(context, 'reconcile', target.id, classifyLinkFailure(res), res);
+  }
+  return failed(context, 'commit', target.id, classifyLinkFailure(res), res);
+}
+
+async function reconcileOperation(context, target) {
+  const { api, requestId, logger } = context;
+  for (let attempt = 0; attempt < context.reconcileAttempts; attempt++) {
+    if (attempt > 0) await context.sleep(context.retryDelayMs);
+    const op = await api.linkOperation(requestId, { targetInstance: target.id });
+    if (!op.ok || !fromTarget(op, target.id)) continue;
+    if (!op.found) continue;
+    logger.warn(`[link] rid=${requestId} stage=reconcile target=${target.id ?? '-'} işlem sonucu=${op.result}`);
+    if (op.result === 'linked') {
+      return confirmLinked(context, target, { ...op, created: true, replay: false });
+    }
+    return failed(context, 'reconcile', target.id, classifyLinkFailure({ errorCode: op.result }), op);
+  }
+  return null;
+}
+
+/** Doğrulama yanıtı + geri okunan kayıt aynı UUID–Discord–sürüm üçlüsünü göstermeli. */
+async function confirmLinked(context, target, res) {
+  const { api, discordId, requestId } = context;
+  const link = res.link;
+  if (!link || typeof link.discordId !== 'string' || link.discordId !== discordId || !link.uuid || !link.linkId) {
+    return failed(context, 'commit', target.id, classifyLinkFailure({ errorCode: 'verification_mismatch' }), res);
+  }
+  for (let attempt = 0; attempt < context.readbackAttempts; attempt++) {
+    if (attempt > 0) await context.sleep(context.retryDelayMs);
+    const info = await api.linkInfo('discord', discordId, { targetInstance: target.id });
+    if (!info.ok || !fromTarget(info, target.id)) continue;
+    const current = info.link;
+    if (info.linked && current?.uuid === link.uuid && current?.linkId === link.linkId
+      && current?.discordId === discordId) {
+      return {
+        outcome: 'linked',
+        created: Boolean(res.created),
+        replay: Boolean(res.replay),
+        mc: current.currentName ?? current.mcName,
+        link: current,
+        instance: target.id,
+        requestId,
+        correlationId: res.correlationId,
+      };
+    }
+    return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'state_changed' }), info);
+  }
+  return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'unconfirmed' }), res);
+}
+
+/** 1.2.1 plugin (protokol 2 yok) ya da doğrudan HTTP: tek depo, eski uçlar. */
+async function legacyCommit(context, target) {
+  const {
+    api, normalized, discordId, discordTag,
+  } = context;
+  const res = await api.linkVerify(normalized, discordId, discordTag, { targetInstance: target.id });
+  if (!res.ok) {
+    if (UNCERTAIN_CODES.has(res.errorCode) || Number(res.status) >= 500) {
+      // Eski plugin işlem kimliği tutmaz: başarıyı kanıtlayamayız, "geçersiz" de diyemeyiz.
+      const status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance: target.id });
+      if (status.ok && status.linked) {
+        return failed(context, 'reconcile', target.id, classifyLinkFailure({ errorCode: 'unconfirmed' }), res);
+      }
+    }
+    return failed(context, 'commit', target.id, classifyLinkFailure(res), res);
+  }
+  if (!fromTarget(res, target.id)) {
+    return failed(context, 'commit', target.id, classifyLinkFailure({ errorCode: 'wrong_instance' }), res);
+  }
+  const status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance: target.id });
+  if (!status.ok || !fromTarget(status, target.id)) {
+    return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'unconfirmed' }), status);
+  }
+  if (!status.linked) {
+    return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'state_changed' }), status);
+  }
+  const sameDiscord = status.discordId === undefined || String(status.discordId) === discordId;
+  const sameAccount = !res.uuid || !status.uuid ? (!res.mc || status.mc === res.mc) : res.uuid === status.uuid;
+  if (!sameDiscord || !sameAccount) {
+    return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'verification_mismatch' }), status);
+  }
+  return {
+    outcome: 'linked',
+    created: res.created ?? true,
+    replay: Boolean(res.replay),
+    mc: status.mc ?? res.mc,
+    link: status.uuid ? {
+      uuid: status.uuid, discordId, linkId: status.linkId ?? null, currentName: status.mc,
+    } : null,
+    instance: target.id,
+    requestId: context.requestId,
+    legacy: true,
+    correlationId: res.correlationId,
+  };
+}
+
+function failed(context, stage, targetId, failure, res = {}, extra = '') {
+  const snapshot = extra || bridgeSnapshot(context.api);
+  context.logger.warn(`[link] rid=${context.requestId} stage=${stage} target=${targetId ?? '-'}`
+    + ` sonuç=${failure.kind}/${failure.errorCode} status=${res.status ?? '-'} transport=${res.transport ?? '-'}`
+    + ` cid=${res.correlationId ?? '-'} yanıtlayan=${res.instance ?? res.claimedBy ?? '-'}${snapshot ? ` ${snapshot}` : ''}`);
+  return {
+    outcome: 'failed', failure, requestId: context.requestId, correlationId: res.correlationId,
+  };
 }
 
 /** Hata anındaki köprü durumunu tek satıra sıkıştırır (secret/kod içermez). */

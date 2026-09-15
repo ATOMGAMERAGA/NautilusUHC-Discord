@@ -394,3 +394,45 @@ test('stats: 5xx yanıtı önbelleğe alınmaz', async () => {
   await publicStats('/live', '', { queue });
   assert.equal(calls, 2, 'geçici plugin hatası TTL boyunca yapışmamalı');
 });
+
+/* ------------------------------------------------------------------ */
+/* Sonuç eşleşmesi: hedef instance, geç ve tekrarlanan sonuçlar        */
+/* ------------------------------------------------------------------ */
+
+test('kuyruk: hedefli işin sonucu başka açık kimlikten gelirse bekleyen çözülmez', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/link/v2/verify', targetInstance: 'mc-canli' }, 2000);
+  const [job] = await q.takeJobs(0, { instanceId: 'mc-canli' });
+  assert.equal(q.completeJobFrom(job.jobId, 200, { sahte: true }, 'mc-test'), 'wrong_instance');
+  assert.equal(q.stats().waiting, 1, 'yanlış instance sonucu işi kapatmamalı');
+  assert.equal(q.completeJobFrom(job.jobId, 200, { gercek: true }, 'mc-canli'), 'completed');
+  assert.deepEqual((await promise).data, { gercek: true });
+  assert.equal(q.completeJobFrom(job.jobId, 200, { tekrar: true }, 'mc-canli'), 'unknown',
+    'tekrarlanan sonuç ikinci kez işlenmemeli');
+});
+
+test('kuyruk: kimliksiz eski plugin sonucunda IP kimliği karşılaştırılmaz (geriye uyumluluk)', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/status' }, 2000);
+  const [job] = await q.takeJobs(0, { instanceId: 'ip:172.18.0.1' });
+  assert.equal(q.completeJobFrom(job.jobId, 200, {}, 'ip:172.18.0.9'), 'completed');
+  await promise;
+});
+
+test('kuyruk: zaman aşımından sonra gelen sonuç geç sonuç olarak tanınır', async () => {
+  const q = createBridgeQueue();
+  const promise = q.enqueue({ path: '/api/link/v2/verify', targetInstance: 'mc-canli' }, 30);
+  const [job] = await q.takeJobs(0, { instanceId: 'mc-canli' });
+  await assert.rejects(promise, /zaman aşımı/);
+  assert.equal(q.completeJobFrom(job.jobId, 200, {}, 'mc-canli'), 'late');
+  assert.equal(q.lateResultInfo(job.jobId).path, '/api/link/v2/verify');
+  assert.equal(q.lateResultInfo(job.jobId).claimedBy, 'mc-canli');
+});
+
+test('kuyruk: yoklamada bildirilen hesap bağlama protokolü instance başına tutulur', async () => {
+  const q = createBridgeQueue();
+  await q.takeJobs(0, { instanceId: 'mc-yeni', linkProtocol: 2 });
+  await q.takeJobs(0, { instanceId: 'mc-eski' });
+  const meta = Object.fromEntries(q.instanceMeta().map((m) => [m.id, m.linkProtocol]));
+  assert.deepEqual(meta, { 'mc-yeni': 2, 'mc-eski': 0 });
+});

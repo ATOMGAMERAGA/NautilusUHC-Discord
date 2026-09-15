@@ -1,103 +1,33 @@
+import { PermissionFlagsBits, MessageFlags } from 'discord.js';
 import {
-  ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, PermissionFlagsBits,
-  MessageFlags,
-} from 'discord.js';
-import {
-  okEmbed, errEmbed, warnEmbed, neutralEmbed, Colors,
+  okEmbed, errEmbed, warnEmbed, neutralEmbed,
 } from './embeds.js';
-import { mcapi } from './mcapi.js';
-import { verifyLinkCode } from './linkflow.js';
-import { addCase, giveaways, polls, dmSubscriptions } from './db.js';
+import { giveaways, polls, dmSubscriptions } from './db.js';
 import { confirmDecision } from './matchdm.js';
-import { clean, codeText } from './util.js';
-import { sendLog } from './modlog.js';
+import { clean } from './util.js';
 import { ticketComponents } from './tickets.js';
 import { buildLivePayload } from './commands/mac.js';
-import { syncMemberTierRole, roleMap } from './rolesync.js';
+import { linkCodeModal, handleLinkModal } from './linkui.js';
+import { linkAdminComponents } from './linkadmin.js';
 
 /**
  * Component (button / modal) handlers, keyed by customId prefix.
  *
  * customId'ler köprü/panel sözleşmesinin parçasıdır ve DEĞİŞTİRİLMEZ; yalnız
  * kullanıcıya görünen metin, renk ve akış geri bildirimi tasarlanır.
- * Hesap bağlama akışı: panel butonu → kod modalı → plugin doğrular → bağlantı.
+ * Hesap bağlama akışı: panel butonu → kod modalı → plugin doğrular → bağlantı
+ * (ayrıntı: linkui.js / linkflow.js).
  */
 export const componentHandlers = {
   'link:open': async (interaction) => {
-    const modal = new ModalBuilder()
-      .setCustomId('link:modal')
-      .setTitle('Minecraft Hesabını Bağla')
-      .addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('code')
-            .setLabel('Bağlantı Kodu')
-            .setPlaceholder('Örn: A1B2C3')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(4)
-            .setMaxLength(10)
-            .setRequired(true),
-        ),
-      );
-    await interaction.showModal(modal);
+    await interaction.showModal(linkCodeModal());
   },
 
-  'link:modal': async (interaction) => {
-    const code = interaction.fields.getTextInputValue('code');
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  'link:modal': (interaction) => handleLinkModal(interaction),
 
-    // Karar linkflow.js'te verilir (Discord'dan bağımsız, test edilebilir):
-    // "kod geçersiz/süresi dolmuş" YALNIZCA plugin invalid_code/expired_code
-    // dediğinde gösterilir; köprü/yapılandırma hataları kendi adıyla anılır.
-    const decision = await verifyLinkCode({
-      code, discordId: interaction.user.id, discordTag: interaction.user.tag,
-    });
+  /* ---------------- Hesap bağlantısı yönetimi (linkadmin.js) ---------------- */
 
-    if (decision.outcome === 'already_linked_self') {
-      return interaction.editReply({
-        embeds: [warnEmbed(
-          `Discord hesabın zaten **${clean(decision.mc, 30)}** ile eşleşmiş durumda.\n`
-          + 'Bağlantıyı değiştirmen gerekiyorsa `/destek aç` ile talep oluştur.',
-          'Hesabın Zaten Bağlı',
-        )],
-      });
-    }
-    if (decision.outcome === 'failed') {
-      const { kind, title, description } = decision.failure;
-      return interaction.editReply({
-        embeds: [kind === 'already_linked_other'
-          ? warnEmbed(description, title)
-          : errEmbed(description, title)],
-      });
-    }
-
-    const { mc } = decision;
-    addCase('link_create', interaction.user.id, interaction.user.id, null, mc);
-    await sendLog(interaction.client, {
-      title: 'Hesap Bağlandı',
-      color: Colors.success,
-      fields: [
-        { name: 'Kullanıcı', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: true },
-        { name: 'Minecraft', value: `\`${codeText(mc, 30)}\``, inline: true },
-      ],
-    });
-    // ELO tier rolünü hemen ver (best-effort; rol eşlemesi kuruluysa).
-    if (interaction.guild && Object.keys(roleMap()).length) {
-      try {
-        const profile = await mcapi.statsPlayer(`name=${encodeURIComponent(mc)}`);
-        if (profile.ok && profile.found && profile.tier) {
-          await syncMemberTierRole(interaction.guild, interaction.user.id, profile.tier);
-        }
-      } catch { /* rol senkronu link akışını asla bozmaz */ }
-    }
-    return interaction.editReply({
-      embeds: [okEmbed(
-        `Minecraft hesabın **${clean(mc, 30)}** ile eşleştirildi.\n`
-        + 'Artık Nautilus maçlarına katılabilir, profilini `/profil` ile görebilirsin.',
-        '🔗 Hesap Bağlandı',
-      )],
-    });
-  },
+  ...linkAdminComponents,
 
   /* ---------------- /maç canlı yenile butonu ---------------- */
 

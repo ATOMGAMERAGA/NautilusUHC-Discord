@@ -17,6 +17,7 @@ import moderation from './commands/moderation.js';
 import mc from './commands/mc.js';
 import mac from './commands/mac.js';
 import link from './commands/link.js';
+import linkadmin from './commands/linkadmin.js';
 import admin from './commands/admin.js';
 import utility from './commands/utility.js';
 import stats from './commands/stats.js';
@@ -26,6 +27,7 @@ import bildirim from './commands/bildirim.js';
 import saglik from './commands/saglik.js';
 import { dispatchMatchDms } from './matchdm.js';
 import { handleTierChangeEvent } from './rolesync.js';
+import { handleLinkRemovedEvent, startLinkEffects } from './linkeffects.js';
 import { startStatusBoard } from './statusboard.js';
 import { registerTicketMessages, startTicketWatcher } from './tickets.js';
 
@@ -34,7 +36,7 @@ import { registerTicketMessages, startTicketWatcher } from './tickets.js';
 logConfigIssues();
 
 const allCommands = [
-  ...moderation, ...mc, ...mac, ...link, ...admin, ...utility, ...stats, ...fun, ...destek,
+  ...moderation, ...mc, ...mac, ...link, ...linkadmin, ...admin, ...utility, ...stats, ...fun, ...destek,
   ...bildirim, ...saglik,
 ];
 const commandMap = new Map(allCommands.map((c) => [c.data.name, c]));
@@ -112,8 +114,9 @@ client.once(Events.ClientReady, async () => {
   }
 
   // Event hook'ları: DM dağıtımı (match_start) + ELO tier rol senkronu
-  // (tier_change). Hook'lar kanal yönlendirmesinden bağımsız her event'te
-  // koşar; biri hata verse diğeri etkilenmez.
+  // (tier_change) + oyun içi unlink sonrası tier rol temizliği (link_removed).
+  // Hook'lar kanal yönlendirmesinden bağımsız her event'te koşar; biri hata
+  // verse diğeri etkilenmez.
   startHttpServer(client, {
     onEvent: async (envelope) => {
       try { await dispatchMatchDms(client, envelope); } catch (err) {
@@ -122,9 +125,14 @@ client.once(Events.ClientReady, async () => {
       try { await handleTierChangeEvent(client, envelope); } catch (err) {
         console.error('[bot] rol senkron hatası:', err.message);
       }
+      try { await handleLinkRemovedEvent(client, envelope); } catch (err) {
+        console.error('[bot] bağlantı kaldırma rol temizliği kuyruğa alınamadı:', err.message);
+      }
     },
   });
   startScheduler(client);
+  // Hesap bağlama yan işlemleri (audit/log/rol) — sınırlı yeniden deneme.
+  startLinkEffects(client);
   // Durum panosu + canlı presence (60 sn tick).
   startStatusBoard(client);
   // Destek sistemi: kanalı silinmiş talepleri kapat + SLA/hareketsizlik gözcüsü.
@@ -138,6 +146,17 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.guild && interaction.guild.id !== config.guildId) return;
+
+    if (interaction.isAutocomplete()) {
+      const command = commandMap.get(interaction.commandName);
+      // Otomatik tamamlama da yetkiye tabidir (sunucu kimlikleri yalnız yetkiliye).
+      if (command?.autocomplete && interaction.inGuild() && hasTier(interaction.member, command.tier)) {
+        await command.autocomplete(interaction);
+      } else {
+        await interaction.respond([]);
+      }
+      return;
+    }
 
     if (interaction.isChatInputCommand()) {
       const command = commandMap.get(interaction.commandName);
@@ -170,6 +189,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Gerçek istisna yalnız sunucu logunda kalır; kullanıcı hiçbir zaman
     // stack trace, endpoint veya kütüphane mesajı görmez.
     console.error(`[bot] Etkileşim hatası (${interaction.commandName ?? interaction.customId}):`, err);
+    if (interaction.isAutocomplete?.()) return;
     const payload = {
       embeds: [failureEmbed('Sorun sürerse `/destek aç` ile bir talep oluşturabilirsin.')],
       flags: MessageFlags.Ephemeral,

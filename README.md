@@ -51,12 +51,33 @@ TPS/MSPT/bellek/uptime'ı gösterir. Oyun içi ceza/rapor/faz olayları köprü
 ### Hesap bağlama (MC ↔ Discord)
 - Maça katılmak (host olmak dahil) için hesap bağlama **zorunludur**.
 - `/admin dclinkgönder` → bot, link kanalına **Hesap Bağla** butonlu paneli atar.
-- Oyuncu oyun içinde `/link` yazar → tıklayınca kopyalanan tek kullanımlık kod alır →
+- Oyuncu oyun içinde `/link` yazar → tıklayınca kopyalanan tek kullanımlık kod alır
+  (plugin 1.2.2: 8 karakter, ör. `9DK7QX4M`; her `/link` önceki kodu iptal eder) →
   butona tıklayıp kodu girer → hesaplar bağlanır.
 - Zaten bağlıysa `/link` hangi hesapla bağlı olduğunu söyler ve değişiklik için destek
   talebi açmasını ister.
-- `/kayıtsil mc <oyuncu>` veya `/kayıtsil dc <@kullanıcı>` ile yetkililer kaydı siler
-  (aynı komut oyun içinde de vardır).
+
+#### Yetkili yönetimi (tüm yanıtlar ephemeral)
+
+| Komut | Kademe | Ne yapar |
+|---|---|---|
+| `/linkler [sayfa] [sunucu]` | Mod+ | Aktif bağlantılar; en son eşleşen önce, toplam sayı, sayfalı |
+| `/linkbilgi oyuncu:/kullanıcı:/discord-id:/uuid: [sunucu]` | Mod+ | MC adı + UUID, Discord kullanıcı + ID, bağlanma zamanı, durum, son işlemler; ayrılmış kullanıcı ID ile incelenir |
+| `/unlink oyuncu:/kullanıcı:/discord-id:/uuid: [neden] [sunucu]` | Admin | Kaldırılacak çifti gösterir, **onay butonu** ile iki taraftan kaldırır |
+| `/linkgecmisi [hedef] [sunucu]` | Mod+ | Link/unlink geçmişi; aktif durum ayrı gösterilir |
+| `/kayıtsil mc\|dc` | Admin | Geriye uyumlu onaysız kısayol (aynı katı kurallar) |
+
+- Veri her zaman plugin'in kalıcı deposundan okunur; bot logundan aktif bağlantı tahmin edilmez.
+- İsim birebir çözülür; birden fazla hesap eşleşirse işlem yapılmaz, UUID/Discord ID istenir.
+- Onay paneli tek kullanımlıktır, 15 dk geçerlidir; onay anında yetki ve bağlantı sürümü
+  yeniden doğrulanır. Panel açıldıktan sonra oyuncu unlink/relink yaptıysa eski panel yeni
+  bağlantıyı silemez ("Kayıt Değişti" + güncel kayıt).
+- Butonları yalnız paneli açan yetkili kullanabilir.
+- Birden fazla Minecraft sunucusu bağlıysa `sunucu` seçimi zorunludur; yalnız seçilen depo değişir.
+- Kaldırma sonrası yalnız ELO tier rolleri temizlenir, audit kaydı ve log kartı atılır. Bu yan
+  işlemler kalıcı kuyrukta sınırlı sayıda yeniden denenir; hataları `/sağlık`'ta görünür ve
+  başarılı kaldırmayı "başarısız" göstermez.
+- Oyun içi: `/unlink <oyuncu> [sebep]`, `/unlink mc|dc|uuid <değer> [sebep]` (`nautilus.mod.unlink`).
 
 ### Güvenlik
 - **Patlama koruması (anti-nuke):** kısa sürede toplu kanal/rol silme-oluşturma, toplu
@@ -235,28 +256,31 @@ gösterilir. HTTP 400/404 tek başına kod hatası sayılmaz; `not_found`,
 hatası olarak anlatılır. Doğrulamanın tek doğruluk kaynağı plugin'dir — bot
 kod üretmez, saklamaz.
 
-Aynı `BRIDGE_SECRET` ile birden fazla, açık kimlikli plugin bağlanırsa bot kodu
-rastgele bir sunucuya göndermez. En son görülen instance'tan başlayarak her
-sunucuya ayrı ve hedefli doğrulama yapar; ancak bütün sunucular açıkça
-`invalid_code` / `expired_code` döndürürse kullanıcıya kod hatası gösterir.
-Instance kimliği aynı veya anonim kaldığı için güvenli hedefleme yapılamıyorsa
-bot `multiple_plugin_instances` hatası verir.
+Birden fazla açık kimlikli plugin aynı `BRIDGE_SECRET` ile bağlıysa bot kodu
+sunuculara sırayla göndermez ("ilk başarı veren sunucu" seçimi, başka bir
+oyuncunun deposunda aynı kodu bulup yanlış hesaba bağlayabiliyordu). Plugin 1.2.2
+kodu üreten sunucunun 2 karakterlik kapsamını kodun başına koyar
+(`src/linkrouting.js` ↔ `LinkScope.java`); doğrulama yalnız o sunucuya gider.
+Aynı kapsamı paylaşan birden fazla sunucu ya da kapsamsız eski kod varsa bot önce
+**salt-okunur** yoklama yapar; kod tam olarak tek depoda bulunmazsa hiçbir yere
+yazma isteği gönderilmez (`code_conflict` → oyuncudan yeni kod istenir). Yanıt
+vermeyen bir depo varsa da tek sahip kanıtlanamadığı için işlem yapılmaz.
+Protokol 2 desteklemeyen eski plugin çoklu kurulumda, aynı/anonim kimlikli
+yoklamalar ise her durumda `multiple_plugin_instances` ile durdurulur.
 
-`NautilusUHC-1.2.1-linkfix.jar` ile bekleyen kodun ham değeri değil SHA-256 özeti,
-oyuncu bilgisi ve son kullanma zamanı
-`plugins/NautilusUHC/pending-link-codes.dat` dosyasına atomik yazılır. Böylece
-plugin reload/restart sırasında henüz süresi dolmamış kod kaybolmaz. Oyuncunun
-her `/link` çağrısı yeni kod üretir ve daha önce gösterilen kodu anında iptal
-eder; farklı oyuncuların aktif kodları birbirine karışmaz. Her
-doğrulama dosyayı kilit altında yeniden okur; önceden açılmış bir servis örneği
-de sonradan üretilen kodu görür. Başarılı doğrulamadan sonra ham kod saklanmadan
-10 dakikalık, Discord hesabına bağlı bir başarı makbuzu tutulur. Aynı isteğin
-bot, ağ veya başka bir replica tarafından tekrar teslimi aynı başarıyı döndürür;
-aynı kullanılmış kod başka bir Discord hesabında kesinlikle kabul edilmez.
-SQLite kaydı transaction içinde yalnız yoksa eklenir; yarım kalmış bir isteğin
-başka Discord hesabıyla mevcut Minecraft bağlantısını ezmesi engellenir. Kod
-deposu ya da veritabanı okunamıyorsa plugin `invalid_code` üretmek yerine açık
-bir sunucu hatası verir.
+Doğrulama yazması zaman aşımına uğrarsa (işlem commit olmuş olabilir) bot başka
+sunucuya yazmaz; aynı sunucudan aynı `requestId` ile işlemin kesin sonucunu sorar
+(`/api/link/v2/operation`). Başarı ancak doğrulama yanıtı ve ardından geri okunan
+kayıt aynı UUID–Discord çiftini ve bağlantı sürümünü gösterirse sayılır;
+tutarsızlık, yanlış instance'tan gelen yanıt ya da doğrulanamayan sonuç kullanıcıya
+başarı olarak gösterilmez. Hedeflenen işin sonucu başka bir açık kimlikten gelirse
+köprü onu reddeder (`409 wrong_instance`). Discord ID'leri her yerde string taşınır.
+
+Plugin tarafındaki kalıcılık, unlink iptali (epoch), çökme penceresi, kesin isim
+çözümleme, geçmiş, kurulum ve geri dönüş için bkz.
+[`plugin-patch/README.md`](plugin-patch/README.md). Kalıcı eşleme sonrası
+audit/log/rol işleri kullanıcı yanıtından sonra kalıcı kuyruğa alınır; hataları
+eşlemeyi "başarısız" göstermez ve `/sağlık`'ta görünür kalır.
 
 Bot aynı Discord hesabı ve normalize edilmiş kod için hâlen çalışan modal
 teslimlerini de tek doğrulamada birleştirir. Böylece tek kullanımlık kod ağdaki

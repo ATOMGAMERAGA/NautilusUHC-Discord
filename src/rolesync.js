@@ -124,7 +124,7 @@ export async function ensureTierRoles(guild) {
 
 /**
  * Bir üyenin tier rolünü hedef tier'a göre düzeltir. Hiyerarşi dışı veya
- * yönetilen roller sessizce atlanır (loglanır). @returns {{ok, changed?, error?}}
+ * yönetilen roller sessizce atlanır (loglanır). @returns {{ok, changed?, error?, missingMember?}}
  */
 export async function syncMemberTierRole(guild, discordId, tierName, { actorId = null } = {}) {
   const map = roleMap();
@@ -139,7 +139,7 @@ export async function syncMemberTierRole(guild, discordId, tierName, { actorId =
   }
   const member = await guild.members.fetch(discordId).catch(() => null);
   if (!member) {
-    return { ok: false, error: 'Üye sunucuda bulunamadı.' };
+    return { ok: false, missingMember: true, error: 'Üye sunucuda bulunamadı.' };
   }
   const current = [...member.roles.cache.keys()];
   const { add, remove } = computeRoleChanges(current, map, tierName);
@@ -169,20 +169,92 @@ export async function syncMemberTierRole(guild, discordId, tierName, { actorId =
 }
 
 /**
- * Köprü tier_change eventi hook'u: bağlı hesabı bulur ve rolü senkronlar.
- * Test eventleri ve bağlantısız oyuncular sessizce atlanır.
+ * Bağlantı kaldırıldığında üyeden YALNIZ eşlenmiş tier rollerini söker; ilgisiz
+ * roller korunur. Botun yetkisinin üstündeki rol varsa kısmi sonucu hata
+ * olarak döndürür (yeniden denenebilir kalsın diye).
+ * @returns {{ok:boolean, changed:boolean, error?:string, missingMember?:boolean}}
  */
-export async function handleTierChangeEvent(client, envelope) {
+export async function removeTierRoles(guild, discordId, { actorId = null, reason = 'Hesap bağlantısı kaldırıldı' } = {}) {
+  const tierRoleIds = new Set(Object.values(roleMap()).filter(Boolean));
+  if (!tierRoleIds.size) return { ok: true, changed: false };
+  const member = await guild.members.fetch(discordId).catch(() => null);
+  if (!member) return { ok: false, changed: false, missingMember: true, error: 'Üye sunucuda bulunamadı.' };
+  let changed = false;
+  const blocked = [];
+  for (const roleId of [...member.roles.cache.keys()]) {
+    if (!tierRoleIds.has(roleId)) continue;
+    if (!assignable(guild, guild.roles.cache.get(roleId))) {
+      blocked.push(roleId);
+      continue;
+    }
+    await member.roles.remove(roleId, reason);
+    changed = true;
+  }
+  if (changed) addCase('elorank_unlink_cleanup', discordId, actorId ?? 'system', null, reason);
+  if (blocked.length) {
+    return { ok: false, changed, error: `Tier rolü botun yetkisinin üstünde: ${blocked.join(', ')}` };
+  }
+  return { ok: true, changed };
+}
+
+/**
+ * Köprü tier_change eventi hook'u: bağlı hesabı bulur ve rolü senkronlar.
+ * Test eventleri ve bağlantısız oyuncular sessizce atlanır. Event yalnız oyuncu
+ * adını taşıdığından ad birden fazla hesapla eşleşirse (plugin 409) rol verilmez.
+ */
+export async function handleTierChangeEvent(client, envelope, { api = mcapi } = {}) {
   if (envelope?.type !== 'tier_change' || envelope.test) return;
   const player = envelope.data?.player;
   const newTier = envelope.data?.newTier;
   if (!player || !newTier) return;
   const guild = client.guilds.cache.get(config.guildId);
   if (!guild) return;
-  const link = await mcapi.linkStatus(`mc=${encodeURIComponent(player)}`);
-  if (!link.ok || !link.linked || !link.discordId) return;
+  const link = await api.linkStatus(`mc=${encodeURIComponent(player)}`);
+  if (!link.ok) {
+    if (link.status === 409) {
+      console.warn(`[rolesync] ${player} adı birden fazla hesapla eşleşiyor; tier rolü güvenlik için senkronlanmadı`);
+    }
+    return;
+  }
+  if (!link.linked || !link.discordId) return;
   const res = await syncMemberTierRole(guild, link.discordId, newTier);
   if (!res.ok) {
     console.warn(`[rolesync] ${player} → ${newTier} senkronlanamadı: ${res.error}`);
   }
+}
+
+/**
+ * Toplu tier senkronu için bağlı hesaplar.
+ *
+ * Plugin 1.2.2 tek sunucuda tier'ı UUID üzerinden (players.elo) verir. Eski
+ * `/api/links` ucu istatistiği oyuncu ADINA göre eşlediği için ad değişikliğinde
+ * başka bir oyuncunun tier'ını döndürebilir; yalnız eski pluginlerde kullanılır.
+ * @returns {Promise<{ok:true, links:{discordId:string, tier:string, uuid?:string}[], source:string} | {ok:false, res:object}>}
+ */
+export async function collectTierLinks(api = mcapi) {
+  const bridge = api.bridgeStatus({ requireSingleInstance: false });
+  const meta = bridge.ok && bridge.transport === 'reverse' ? (bridge.instanceMeta ?? []) : [];
+  if (meta.length === 1 && meta[0].linkProtocol >= 2) {
+    const target = meta[0].id.startsWith('ip:') ? null : meta[0].id;
+    const links = [];
+    let offset = 0;
+    for (let page = 0; page < 400; page++) {
+      const res = await api.linkList({ offset, limit: 25 }, { targetInstance: target });
+      if (!res.ok) return { ok: false, res };
+      const rows = Array.isArray(res.links) ? res.links : [];
+      for (const row of rows) {
+        if (row.discordId && row.tier) links.push({ discordId: String(row.discordId), tier: row.tier, uuid: row.uuid });
+      }
+      offset += rows.length;
+      if (rows.length === 0 || offset >= Number(res.total)) break;
+    }
+    return { ok: true, links, source: 'uuid' };
+  }
+  const res = await api.links();
+  if (!res.ok) return { ok: false, res };
+  return {
+    ok: true,
+    links: (res.links ?? []).filter((l) => l.discordId && l.tier).map((l) => ({ discordId: String(l.discordId), tier: l.tier })),
+    source: 'legacy',
+  };
 }

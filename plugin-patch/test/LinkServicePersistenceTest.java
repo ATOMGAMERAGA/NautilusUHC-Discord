@@ -32,14 +32,16 @@ public final class LinkServicePersistenceTest {
             require(!persisted.contains(code), "ham tek kullanımlık kod diske yazılmamalı");
         }
 
-        // 1.1.1'in v1 dosyasını taklit et; 1.1.2 yükseltmesi bekleyen kodu
-        // kaybetmeden okuyabilmeli ve ilk mutasyonda v2 biçimine çevirmeli.
-        String v2Pending = Files.readAllLines(pending, StandardCharsets.UTF_8).stream()
+        // 1.1.1'in v1 dosyasını taklit et; yükseltme bekleyen kodu kaybetmeden
+        // okuyabilmeli ve ilk mutasyonda güncel biçime çevirmeli.
+        String currentPending = Files.readAllLines(pending, StandardCharsets.UTF_8).stream()
                 .filter(line -> line.startsWith("P\t"))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("v2 bekleyen kod satırı bulunamadı"));
+                .orElseThrow(() -> new AssertionError("bekleyen kod satırı bulunamadı"));
+        String[] fields = currentPending.split("\t", -1);
         Files.write(pending, java.util.List.of(
-                "nautilus-link-codes-v1", v2Pending.substring(2)), StandardCharsets.UTF_8);
+                "nautilus-link-codes-v1", String.join("\t", fields[1], fields[2], fields[3], fields[4])),
+                StandardCharsets.UTF_8);
 
         try (DataStore store = new DataStore(database.toFile(), Logger.getAnonymousLogger())) {
             LinkService afterRestart = new LinkService(store);

@@ -1,11 +1,14 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { Tier } from '../permissions.js';
 import { baseEmbed, brandFooter, Colors } from '../embeds.js';
-import { db, pendingTaskCount, ticketsV2, getSetting } from '../db.js';
+import {
+  db, pendingTaskCount, ticketsV2, getSetting, linkSideEffects,
+} from '../db.js';
 import { mcapi } from '../mcapi.js';
 import { bridgeQueue } from '../bridgequeue.js';
 import { config } from '../config.js';
-import { formatDuration, discordTime } from '../util.js';
+import { formatDuration, discordTime, codeText } from '../util.js';
+import { LINK_PROTOCOL } from '../linkrouting.js';
 
 /**
  * /sağlık — bot sağlık paneli (Rehber+): uptime, DB, köprü erişimi,
@@ -20,6 +23,16 @@ const BRIDGE_TIMEOUT_MS = 3000;
 
 function moduleLine(name, on) {
   return `${on ? '🟢' : '⚫'} ${name} — ${on ? 'açık' : 'kapalı'}`;
+}
+
+/** Hesap bağlama yan işlem kuyruğu özeti (kalıcı hatalar görünür kalır). */
+export function linkEffectsSummary(store = linkSideEffects) {
+  const counts = store.counts();
+  const problems = store.recentProblems(3);
+  const head = `${counts.pending ?? 0} bekliyor • ${counts.failed ?? 0} kalıcı hata • ${counts.done ?? 0} tamamlandı`;
+  const lines = problems.map((p) => `${p.status === 'failed' ? '🔴' : '🟡'} \`${p.kind}\` `
+    + `(${p.attempts} deneme): ${codeText(p.last_error, 80)}`);
+  return [head, ...lines].join('\n').slice(0, 1000);
 }
 
 export default [
@@ -47,6 +60,12 @@ export default [
       const uptimeMs = Math.floor(process.uptime() * 1000);
       const pending = pendingTaskCount();
       const openTickets = ticketsV2.openCount();
+      let effects = 'okunamadı';
+      try {
+        effects = linkEffectsSummary();
+      } catch { /* DB sorunu yukarıda ayrıca görünür */ }
+      const protocols = (queue.instanceMeta ?? []).map((m) => `\`${codeText(m.id, 30)}\` → `
+        + (m.linkProtocol >= LINK_PROTOCOL ? `protokol ${m.linkProtocol}` : 'eski plugin (1.2.1 veya öncesi)'));
 
       // Köprü erişilemez olması botu "bozuk" yapmaz: bu bir kısıt (degraded),
       // genel sağlık kararını yalnız veritabanı belirler.
@@ -91,6 +110,12 @@ export default [
           { name: 'Bekleyen görev', value: String(pending), inline: true },
           { name: 'Açık destek talebi', value: String(openTickets), inline: true },
           {
+            name: 'Hesap bağlama protokolü',
+            value: protocols.length ? protocols.join('\n').slice(0, 1000) : '—',
+            inline: false,
+          },
+          { name: 'Bağlantı yan işlemleri (audit/log/rol)', value: effects, inline: false },
+          {
             name: 'Modüller',
             value: [
               moduleLine('Patlama koruması', getSetting('guard_enabled', '1') === '1'),
@@ -118,10 +143,9 @@ export default [
         embed.addFields({
           name: 'Uyarı — birden fazla plugin',
           value: `Köprüye birden fazla Minecraft sunucusu bağlı görünüyor: ${gerekce}.\n`
-            + 'Kodu **üreten** sunucu ile **doğrulayan** sunucu farklı olursa oyuncu doğru kodu '
-            + 'girdiği hâlde "kod geçersiz" görür; bu yüzden hesap bağlama bu durumda BLOKLANIR.\n'
-            + 'Fazladan Minecraft sunucusunu/konteynerini kapat ya da her instance\'a ayrı '
-            + '`BRIDGE_INSTANCE_ID` ver ve yalnız birini bu bota bağla.',
+            + 'Plugin 1.2.2 kodları üreten sunucunun kapsamını taşır ve doğrulama yalnız o sunucuya gider. '
+            + 'Aynı/anonim kimlikli yoklamalar ya da eski pluginler varsa hesap bağlama güvenlik için BLOKLANIR; '
+            + 'her sunucuya ayrı `bridge.instance-id` ver ve tüm sunucuları 1.2.2\'ye güncelle.',
           inline: false,
         });
       }

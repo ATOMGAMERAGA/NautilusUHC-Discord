@@ -42,6 +42,10 @@ import { randomUUID } from 'node:crypto';
  * Eski pluginler hiç açık kimlik göndermediği için onlara ASLA hedefli iş
  * yazılmaz — protokol geriye uyumludur.
  *
+ * Plugin 1.2.2 yoklamada `X-Bridge-Link-Protocol: 2` da bildirir; bot hesap
+ * bağlama protokolünü instance başına buradan öğrenir. Hedefli bir işin sonucu
+ * açık kimlikli BAŞKA bir instance'tan gelirse kabul edilmez.
+ *
  * KİMLİKTEN BAĞIMSIZ İKİNCİ SİNYAL: EŞZAMANLI YOKLAMA SAYISI
  * ----------------------------------------------------------
  * Ters vekil (Dokploy/Traefik/Cloudflare) arkasında HER plugin aynı proxy
@@ -75,8 +79,14 @@ const MAX_PENDING = 200;
  */
 const CONNECTED_WINDOW_MS = MAX_POLL_WAIT_MS * 2 + 10_000;
 
+/** Zaman aşımından sonra gelen sonucu "geç sonuç" olarak tanımak için süre. */
+const LATE_RESULT_WINDOW_MS = 10 * 60_000;
+
 /** Açık kimlik göndermeyen (eski) pluginler için kullanılan kimlik öneki. */
 export const ANONYMOUS_INSTANCE_PREFIX = 'ip:';
+
+const isExplicit = (id) => Boolean(id) && !String(id).startsWith(ANONYMOUS_INSTANCE_PREFIX);
+const pathOnly = (path) => String(path ?? '').split('?')[0];
 
 export function createBridgeQueue({ now = Date.now } = {}) {
   /** Henüz plugin'e teslim EDİLMEMİŞ işler (FIFO). */
@@ -87,8 +97,12 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   const pollers = [];
   /** instanceId → son yoklama zamanı (ms). */
   const instances = new Map();
+  /** instanceId → yoklamada bildirilen hesap bağlama protokolü. */
+  const instanceProtocols = new Map();
   /** Aynı instance kimliğinde iki açık poller'ın en son görüldüğü zaman. */
   const duplicateInstanceSeenAt = new Map();
+  /** Zaman aşımına uğramış işler (jobId → teşhis kaydı); geç sonuç için. */
+  const timedOut = new Map();
 
   let lastPollAt = 0;
   /** Aynı anda en fazla kaç yoklama açıktı ve bu en son ne zaman görüldü. */
@@ -98,10 +112,16 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   /** Pencere dışına düşmüş instance kayıtlarını atar. */
   function pruneInstances(at = now()) {
     for (const [id, seen] of instances) {
-      if (at - seen >= CONNECTED_WINDOW_MS) instances.delete(id);
+      if (at - seen >= CONNECTED_WINDOW_MS) {
+        instances.delete(id);
+        instanceProtocols.delete(id);
+      }
     }
     for (const [id, seen] of duplicateInstanceSeenAt) {
       if (at - seen >= CONNECTED_WINDOW_MS) duplicateInstanceSeenAt.delete(id);
+    }
+    for (const [jobId, record] of timedOut) {
+      if (at - record.at >= LATE_RESULT_WINDOW_MS) timedOut.delete(jobId);
     }
   }
 
@@ -117,6 +137,15 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     return [...instances.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([id]) => id);
+  }
+
+  /** Aktif instance'lar ve bildirdikleri hesap bağlama protokolü. */
+  function instanceMeta() {
+    return activeInstances().map((id) => ({
+      id,
+      linkProtocol: instanceProtocols.get(id) ?? 0,
+      lastSeen: instances.get(id),
+    }));
   }
 
   /**
@@ -180,13 +209,23 @@ export function createBridgeQueue({ now = Date.now } = {}) {
     const job = { jobId, method, path, body, targetInstance };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        const entry = waiting.get(jobId);
         waiting.delete(jobId);
         const idx = pending.findIndex((j) => j.jobId === jobId);
         if (idx >= 0) pending.splice(idx, 1);
+        // İş plugin'e teslim edilmiş olabilir; sonucu geç gelirse teşhis edilsin.
+        timedOut.set(jobId, {
+          path: pathOnly(path),
+          method,
+          targetInstance,
+          claimedBy: entry?.claimedBy ?? null,
+          delivered: idx < 0,
+          at: now(),
+        });
         reject(new Error('Minecraft sunucusuna ulaşılamadı (zaman aşımı).'));
       }, timeoutMs);
       waiting.set(jobId, {
-        resolve: (res) => resolve(res), reject, timer, claimedBy: null, claimedPollId: null,
+        resolve: (res) => resolve(res), reject, timer, claimedBy: null, claimedPollId: null, targetInstance,
       });
       pending.push(job);
       flush();
@@ -198,14 +237,15 @@ export function createBridgeQueue({ now = Date.now } = {}) {
    * ve boş dizi döner (plugin hemen yeniden yoklar).
    *
    * @param {number} waitMs
-   * @param {{instanceId?: string}} [opts] plugin kimliği (yoksa 'legacy')
+   * @param {{instanceId?: string, signal?: AbortSignal, linkProtocol?: number}} [opts]
    */
   function takeJobs(waitMs = MAX_POLL_WAIT_MS, {
-    instanceId = `${ANONYMOUS_INSTANCE_PREFIX}bilinmeyen`, signal = null,
+    instanceId = `${ANONYMOUS_INSTANCE_PREFIX}bilinmeyen`, signal = null, linkProtocol = 0,
   } = {}) {
     const at = now();
     lastPollAt = at;
     instances.set(instanceId, at);
+    instanceProtocols.set(instanceId, Number(linkProtocol) || 0);
     pruneInstances(at);
 
     const pollId = randomUUID().slice(0, 8);
@@ -254,12 +294,32 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   }
 
   /**
-   * Plugin'den gelen sonucu ilgili bekleyene bağlar.
+   * Plugin'den gelen sonucu ilgili bekleyene bağlar (gönderen kontrolü yok).
    * @returns {boolean} false = iş bilinmiyor (zaman aşımına uğramış olabilir)
    */
   function completeJob(jobId, status, data) {
+    return completeJobFrom(jobId, status, data, null) === 'completed';
+  }
+
+  /**
+   * Sonucu, gönderen instance'ı doğrulayarak bağlar.
+   *
+   * İşi açık kimlikli bir instance aldıysa sonuç yalnız aynı kimlikten kabul
+   * edilir. Eski (kimliksiz) pluginlerde kimlik IP'den türediği için kontrol
+   * yapılmaz; bu durum geriye uyumluluk içindir.
+   *
+   * @returns {'completed'|'unknown'|'late'|'wrong_instance'}
+   */
+  function completeJobFrom(jobId, status, data, instanceId) {
     const entry = waiting.get(jobId);
-    if (!entry) return false;
+    if (!entry) {
+      pruneInstances();
+      return timedOut.has(jobId) ? 'late' : 'unknown';
+    }
+    const expected = entry.claimedBy ?? entry.targetInstance;
+    if (isExplicit(expected) && isExplicit(instanceId) && expected !== instanceId) {
+      return 'wrong_instance';
+    }
     waiting.delete(jobId);
     clearTimeout(entry.timer);
     entry.resolve({
@@ -270,7 +330,12 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       claimedBy: entry.claimedBy,
       claimedPollId: entry.claimedPollId,
     });
-    return true;
+    return 'completed';
+  }
+
+  /** Geç gelen sonucun teşhis kaydı (log için). */
+  function lateResultInfo(jobId) {
+    return timedOut.get(jobId) ?? null;
   }
 
   /** Plugin son CONNECTED_WINDOW_MS içinde yokladı mı? */
@@ -331,6 +396,7 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       /** Son pencerede görülen farklı plugin instance sayısı. */
       instances: ambiguity.instances.length,
       instanceIds: ambiguity.instances,
+      instanceMeta: instanceMeta(),
       ambiguous: ambiguity.ambiguous,
       ambiguityReason: ambiguity.reason,
       duplicateInstanceIds: ambiguity.duplicateInstances,
@@ -351,6 +417,8 @@ export function createBridgeQueue({ now = Date.now } = {}) {
       poller.deliver([]);
     }
     instances.clear();
+    instanceProtocols.clear();
+    timedOut.clear();
     lastPollAt = 0;
     peakPollers = 0;
     multiPollerSeenAt = 0;
@@ -358,7 +426,17 @@ export function createBridgeQueue({ now = Date.now } = {}) {
   }
 
   return {
-    enqueue, takeJobs, completeJob, pluginConnected, activeInstances, routingAmbiguity, stats, reset,
+    enqueue,
+    takeJobs,
+    completeJob,
+    completeJobFrom,
+    lateResultInfo,
+    pluginConnected,
+    activeInstances,
+    instanceMeta,
+    routingAmbiguity,
+    stats,
+    reset,
   };
 }
 

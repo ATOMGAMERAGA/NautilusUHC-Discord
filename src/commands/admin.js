@@ -98,11 +98,13 @@ async function handleEloRank(interaction, sub) {
       });
     }
     await interaction.deferReply();
-    const res = await mcapi.links();
-    if (!res.ok) {
-      return interaction.editReply({ embeds: [bridgeErrorEmbed(res, { context: 'bağlantı listesi' })] });
+    // Plugin 1.2.2'de tier UUID üzerinden okunur (ad değişikliğinde yanlış rol verilmez).
+    const { collectTierLinks } = await import('../rolesync.js');
+    const collected = await collectTierLinks(mcapi);
+    if (!collected.ok) {
+      return interaction.editReply({ embeds: [bridgeErrorEmbed(collected.res, { context: 'bağlantı listesi' })] });
     }
-    const links = (res.links ?? []).filter((l) => l.discordId && l.tier);
+    const { links } = collected;
     let synced = 0;
     let skipped = 0;
     let failed = 0;
