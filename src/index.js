@@ -14,6 +14,7 @@ import { startHttpServer } from './httpserver.js';
 import { startScheduler } from './scheduler.js';
 import { createVoiceManager } from './voice.js';
 import teamadmin from './commands/teamadmin.js';
+import testses from './commands/testses.js';
 
 import moderation from './commands/moderation.js';
 import mc from './commands/mc.js';
@@ -39,7 +40,7 @@ logConfigIssues();
 
 const allCommands = [
   ...moderation, ...mc, ...mac, ...link, ...linkadmin, ...admin, ...utility, ...stats, ...fun, ...destek,
-  ...bildirim, ...saglik, ...teamadmin,
+  ...bildirim, ...saglik, ...teamadmin, ...testses,
 ];
 const commandMap = new Map(allCommands.map((c) => [c.data.name, c]));
 
@@ -133,7 +134,8 @@ client.once(Events.ClientReady, async () => {
       }
     },
   });
-  createVoiceManager({ client }).start();
+  client.uhcVoiceManager=createVoiceManager({ client });
+  client.uhcVoiceManager.start();
   startScheduler(client);
   // Hesap bağlama yan işlemleri (audit/log/rol) — sınırlı yeniden deneme.
   startLinkEffects(client);

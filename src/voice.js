@@ -1,3 +1,4 @@
+import { setTimeout as sleepFor } from 'node:timers/promises';
 import { ChannelType, Events, PermissionFlagsBits as P } from 'discord.js';
 import { config } from './config.js';
 import { getSetting, setSetting } from './db.js';
@@ -7,13 +8,13 @@ import { destination, channelSpecs } from './voicecore.js';
 export const VOICE_CATEGORY = '1522215362857406654';
 const REGISTRY_KEY = 'uhc_voice_registry_v1';
 export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGISTRY_KEY,''),
-  write=value=>setSetting(REGISTRY_KEY,value), guildId=config.guildId, logger=console}={}) {
+  write=value=>setSetting(REGISTRY_KEY,value), guildId=config.guildId, logger=console, sleep=sleepFor}={}) {
   let registry;
   try {registry=JSON.parse(read() || '{}');} catch {registry={};}
   registry.channels ??= {};
   registry.linked ??= [];
   registry.permissions = {}; // Reapply the owned permission policy after every bot restart.
-  let snapshot=null, busy=null, timer=null;
+  let snapshot=null, busy=null, timer=null, testSession=null;
   const save=()=>write(JSON.stringify(registry));
   const ownedIds=()=>new Set(Object.values(registry.channels));
   const guild=()=>client.guilds.cache.get(guildId);
@@ -23,7 +24,7 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
     await member.voice.setChannel(id, 'UHC oyun durumuna göre ses yönlendirmesi');
   }
   async function route(member) {
-    if (!snapshot || !member?.voice?.channelId) return;
+    if (!snapshot || !member?.voice?.channelId || (testSession?.id===member.id&&!testSession.cancel)) return;
     const link=snapshot.links.find(l=>l.discordId===member.id);
     if (!link) {
       if (ownedIds().has(member.voice.channelId)) await move(member,null);
@@ -102,7 +103,7 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
     // Only take players from arbitrary voice channels once at match start.
     for(const link of state.links) {
       const m=g.members.cache.get(link.discordId);
-      if(!m?.voice?.channelId) continue;
+      if(!m?.voice?.channelId || (testSession?.id===m.id&&!testSession.cancel)) continue;
       const target=destination(state,link);
       if(starting&&target) await move(m,registry.channels[target]);
       else await route(m);
@@ -124,22 +125,78 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
     if(busy) return busy;
     busy=(async()=>{
       const res=await api.voiceSnapshot();
-      if(!res.ok) {snapshot=null;return;} // Outages must not delete channels or route using stale state.
+      if(!res.ok) {snapshot=null;if(testSession)testSession.cancel='Minecraft köprüsüne ulaşılamadı; test durduruldu.';return;} // Outages must not delete channels or route using stale state.
       if(!Array.isArray(res.links)||!Array.isArray(res.teams)||typeof res.enabled!=='boolean'||typeof res.active!=='boolean'||(res.active&&typeof res.matchKey!=='string')) {
         snapshot=null;throw new Error('UHC ses köprüsü geçersiz yanıt verdi');
       }
+      if(testSession&&res.enabled)testSession.matchTakenOver=true;
+      if(testSession&&!testSession.cancel) {
+        const session=testSession;
+        if(res.enabled) session.cancel='Aktif veya planlanmış maç var; ses testi durduruldu.';
+        else if(!res.links.some(l=>l.discordId===session.id)) session.cancel='Önce Minecraft hesabını Discord hesabına bağla.';
+        if(session.cancel&&!session.ready) return;
+        if(!session.cancel) {
+          await reconcile({...res,enabled:true,active:false,teams:[{number:1}]});
+          session.ready=true;return;
+        }
+      }
       await reconcile(res);
-    })().catch(err=>{snapshot=null;logger.error('[ses]',err.message);}).finally(()=>{busy=null;});
+    })().catch(err=>{snapshot=null;if(testSession)testSession.cancel='Ses testi hazırlanırken bir hata oluştu. Botun kanal ve taşıma izinlerini kontrol et.';logger.error('[ses]',err.message);}).finally(()=>{busy=null;});
     return busy;
   }
   async function voiceChanged(oldState,newState) {
     if(newState.guild.id!==guildId||oldState.channelId===newState.channelId||!ownedIds().has(newState.channelId))return;
     await tick(); await route(newState.member);
   }
+  async function runTest(member,{onReady=async()=>{}}={}) {
+    if(testSession) return {ok:false,message:'Başka bir ses testi sürüyor. Bitmesini bekle.'};
+    const session={id:member.id,ready:false,cancel:null};testSession=session;
+    const origin=member.voice?.channelId;
+    let result;
+    try {
+      if(busy)await busy;
+      await tick();
+      if(session.cancel||!session.ready)return {ok:false,message:session.cancel||'Ses testi hazırlanamadı.'};
+      const entry=registry.channels.entry;
+      await onReady(entry);
+      if(session.cancel)return {ok:false,message:session.cancel};
+      if(member.voice.channelId)await move(member,entry);
+      // Discord cannot connect a disconnected member: wait for them to enter.
+      for(let seconds=0;!session.cancel&&member.voice.channelId!==entry&&seconds<60;seconds++)await sleep(1000);
+      if(!session.cancel&&member.voice.channelId!==entry)session.cancel='Takım Geçiş kanalına 60 saniye içinde girilmedi; test bitti.';
+      let expected=entry;
+      for(const key of ['team:1','solo','spectator']) {
+        if(session.cancel)break;
+        await sleep(2000);
+        if(session.cancel)break;
+        if(member.voice.channelId!==expected){session.cancel='Ses kanalından ayrıldığın için test bitti.';break;}
+        expected=registry.channels[key];await move(member,expected);
+      }
+      if(!session.cancel) {
+        await sleep(2000);
+        if(member.voice.channelId!==expected)session.cancel='Ses kanalından ayrıldığın için test bitti.';
+      }
+      result=session.cancel?{ok:false,message:session.cancel}:{ok:true,message:'Ses testi tamamlandı: Takım 1 → Solo → İzleyici.'};
+    } catch(err) {
+      logger.error('[testses]',err.message);
+      result={ok:false,message:'Ses testi tamamlanamadı. Botun kanal ve taşıma izinlerini kontrol et.'};
+    } finally {
+      if(busy)await busy;
+      // A real match takes ownership immediately; never move its players back.
+      if(session.ready&&!session.matchTakenOver&&ownedIds().has(member.voice?.channelId)) {
+        await move(member,guild()?.channels.cache.has(origin)?origin:null)
+          .catch(e=>logger.error('[testses]',e.message));
+      }
+      if(busy)await busy;
+      testSession=null;
+      if(session.ready)await tick();
+    }
+    return result;
+  }
   function start() {
     client.on(Events.VoiceStateUpdate,(a,b)=>voiceChanged(a,b).catch(e=>logger.error('[ses]',e.message)));
     client.on(Events.GuildMemberAdd,()=>tick());
     tick(); timer=setInterval(tick,5000);timer.unref();
   }
-  return {tick,start,stop:()=>clearInterval(timer),voiceChanged};
+  return {tick,start,runTest,stop:()=>clearInterval(timer),voiceChanged};
 }

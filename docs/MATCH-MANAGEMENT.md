@@ -16,6 +16,10 @@ Botta **Kanalları Yönet**, **Rolleri Yönet**, **Üyeleri Taşı**, **Bağlan*
 
 Bot yalnız Discord sesine bağlı kişileri taşıyabilir. Maç başlarken katılımcılar mevcut seslerinden taşınır. Sonrasında sistemin seslerindeki takım değişimleri, ölüm ve diriltmeler en fazla yaklaşık 5 saniyede izlenir. Sesten ayrılan oyuncu tekrar Takım Geçiş'e girdiğinde güncel durumuna yönlendirilir. Maçta olmayan bağlı kullanıcı girişte bekler. Son maç/plan bitince yalnız sistemin oluşturduğu kanallar kaldırılır. Köprü koparsa kanallar korunur ve eski durumla yönlendirme yapılmaz.
 
+## Ses testi
+
+Discord `/testses` Admin/üstü içindir ve aktif/planlanmış maç yokken çalışır. Minecraft hesabı bağlı olmalıdır. Bot aynı kategoride kilitli **Takım Geçiş**, **Takım 1**, **Solo**, **İzleyici** kanallarını hazırlar. Seste bulunuyorsan girişe taşır; seste değilsen 60 saniye içinde Takım Geçiş'e girmen gerekir. İki saniye sonra Takım 1'e, iki saniye sonra Solo'ya, iki saniye sonra İzleyici'ye taşır. Son iki saniyenin ardından önceki sesine döndürür (önceden seste değilsen bağlantını keser) ve geçici kanalları temizler. Sesten ayrılınca test durur. Test sırasında maç planlanır/başlarsa gerçek maç yönetimi devralır. Aynı anda tek ses testi çalışır.
+
 ## Duyurular
 
 Temiz başlıklar kullanılır; TEST ön eki yoktur. Gerçek plan duyurusu `@everyone` gönderir. Planı duyurulmuş başlangıç ikinci ping üretmez; plansız başlangıç ping üretir. Maç içi faz/MVP/sonuç/host bildirimi toplu etiket göndermez. Gerçek test olayları da toplu etiket göndermez. DM içerikleri kendi kullanıcı mention izinlerini kullanır.
