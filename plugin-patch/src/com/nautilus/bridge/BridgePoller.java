@@ -186,6 +186,10 @@ public final class BridgePoller {
                         + ", bu=" + self + ", yol=" + pathOnly(path) + ", iş=" + jobId + "); çalıştırılmadı.");
                 status = 421;
                 responseBody = errorBody("wrong_instance", self);
+            } else if (FeatureBridge.handles(method, path)) {
+                FeatureBridge.Response response = FeatureBridge.handle(method, path, body);
+                status = response.status();
+                responseBody = response.body();
             } else if (LinkBridgeApi.handles(method, path)) {
                 LocalResponse response = this.handleLink(method, path, body, self);
                 status = response.status;

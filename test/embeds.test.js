@@ -43,7 +43,7 @@ test('her embed markalı altbilgi taşır, bağlam öne yazılır', () => {
   assert.equal(brandFooter('Sayfa 1/3').text, `Sayfa 1/3 • ${Brand.community}`);
   assert.equal(brandFooter('Sayfa 1/3', '24 kayıt').text,
     `Sayfa 1/3 • 24 kayıt • ${Brand.community}`);
-  assert.ok(baseEmbed().data.footer.iconURL.endsWith('nautilus-icon-mark.png'));
+  assert.ok((baseEmbed().data.footer.icon_url ?? baseEmbed().data.footer.iconURL).endsWith('nautilus-icon-mark.png'));
 });
 
 test('zaman damgası varsayılan değildir (ephemeral kartlarda gürültü yapmaz)', () => {

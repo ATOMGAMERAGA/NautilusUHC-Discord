@@ -12,6 +12,8 @@ import { registerRaidProtection } from './security/raid.js';
 import { registerWelcome } from './welcome.js';
 import { startHttpServer } from './httpserver.js';
 import { startScheduler } from './scheduler.js';
+import { createVoiceManager } from './voice.js';
+import teamadmin from './commands/teamadmin.js';
 
 import moderation from './commands/moderation.js';
 import mc from './commands/mc.js';
@@ -37,13 +39,14 @@ logConfigIssues();
 
 const allCommands = [
   ...moderation, ...mc, ...mac, ...link, ...linkadmin, ...admin, ...utility, ...stats, ...fun, ...destek,
-  ...bildirim, ...saglik,
+  ...bildirim, ...saglik, ...teamadmin,
 ];
 const commandMap = new Map(allCommands.map((c) => [c.data.name, c]));
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
@@ -130,6 +133,7 @@ client.once(Events.ClientReady, async () => {
       }
     },
   });
+  createVoiceManager({ client }).start();
   startScheduler(client);
   // Hesap bağlama yan işlemleri (audit/log/rol) — sınırlı yeniden deneme.
   startLinkEffects(client);

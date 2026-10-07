@@ -207,14 +207,15 @@ test('desteklenmeyen schemaVersion 422 döner', async () => {
   assert.equal(body.error, 'unsupported_schema_version');
 });
 
-test('test eventi rol etiketi taşımaz, normal event taşır', async () => {
+test('test eventi etiket taşımaz, normal maç duyurusu everyone taşır', async () => {
   setSetting('match_ping_role', '42424242');
   const normal = buildAnnouncement('match_start', { host: 'x' }, false);
   const testli = buildAnnouncement('match_start', { host: 'x' }, true);
-  assert.equal(normal.content, '<@&42424242>');
-  assert.deepEqual(normal.allowedMentions.roles, ['42424242']);
+  assert.equal(normal.content, '@everyone');
+  assert.deepEqual(normal.allowedMentions.parse, ['everyone']);
+  assert.equal(normal.allowedMentions.roles, undefined);
   assert.equal(testli.content, undefined);
-  assert.match(testli.embeds[0].data.title, /TEST/);
+  assert.doesNotMatch(testli.embeds[0].data.title, /TEST/);
   setSetting('match_ping_role', '');
 });
 
@@ -319,7 +320,7 @@ test('sözleşme fixture\'ları receiver tarafından işlenir (contract testi)',
     assert.equal(status, 200, `${f} işlenmeli`);
     assert.equal(sends.length, 1, `${f} tek kanal mesajı üretmeli`);
     if (envelope.test) {
-      assert.match(sends[0].embeds[0].data.title, /TEST/, `${f} TEST etiketi taşımalı`);
+      assert.doesNotMatch(sends[0].embeds[0].data.title, /TEST/, `${f} temiz başlık taşımalı`);
       assert.equal(sends[0].content, undefined, `${f} rol pingi taşımamalı`);
     }
     checked++;

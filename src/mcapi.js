@@ -409,6 +409,9 @@ export function createMcApi({
     /* Faz 7: genişletilmiş köprü yüzeyi. */
     capabilities: () => request('/api/capabilities'),
     teams: () => request('/api/teams'),
+    voiceSnapshot: () => request('/api/voice', { requireSingleInstance: true }),
+    teamAdmin: () => request('/api/teamadmin', { requireSingleInstance: true }),
+    teamAction: (body) => request('/api/teamadmin', { method: 'POST', body, requireSingleInstance: true }),
     perf: () => request('/api/server/perf'),
     scenarios: () => request('/api/scenarios'),
     queue: () => request('/api/queue'),

@@ -204,12 +204,12 @@ function authenticate(req, raw) {
  * Köprü eventlerinin duyuru kartları — botun en görünür yüzeyi.
  *
  * Ortak kurallar:
- *  - Başlık olayı tek bakışta anlatır; test eventleri "🧪 TEST —" ile ayrışır.
+ *  - Başlık olayı tek bakışta anlatır; test olayları da temiz başlık kullanır; toplu etiketleme kapalıdır.
  *  - En önemli bilgi (kazanan, başlangıç saati, faz) en üstte durur.
  *  - Alan adları süssüzdür; emoji yalnız başlıkta ve durum işaretlerinde.
  *  - Duyurular zaman damgalıdır: geçmişe bakıldığında ne zaman olduğu okunur.
  */
-const testTitle = (test, title) => `${test ? '🧪 TEST — ' : ''}${title}`;
+const testTitle = (_test, title) => title;
 
 /** Takım boyutu → okunur mod adı. */
 const modeLabel = (teamSize) => (teamSize > 1 ? `To${teamSize}` : 'FFA (Solo)');
@@ -315,7 +315,7 @@ function eventEmbed(type, data, test) {
     case 'message':
       return baseEmbed(test ? Colors.warn : Colors.brand)
         .setTitle(clean(data.title ?? Brand.community, 200))
-        .setDescription(clean(data.message ?? '', 3900))
+        .setDescription(clean(data.message || '—', 3900))
         .setTimestamp();
 
     // Host'un /host mesaj <metin> duyurusu — maç kanalına zengin embed.
@@ -323,7 +323,7 @@ function eventEmbed(type, data, test) {
       return baseEmbed(test ? Colors.warn : Colors.brand)
         .setTitle(testTitle(test, '📣 Host Duyurusu'))
         .setThumbnail(Assets.mark)
-        .setDescription(clean(data.message ?? '', 3900))
+        .setDescription(clean(data.message || '—', 3900))
         .setFooter(brandFooter(`Host: ${codeText(data.host ?? '—', 30)}`))
         .setTimestamp();
 
@@ -424,12 +424,9 @@ export function buildAnnouncement(type, data, test) {
   if (!embed) return null;
   let content;
   const allowedMentions = { parse: [] };
-  if (!test && (type === 'match_scheduled' || type === 'match_start')) {
-    const pingRole = getSetting('match_ping_role', '');
-    if (pingRole) {
-      content = `<@&${pingRole}>`;
-      allowedMentions.roles = [pingRole];
-    }
+  if (!test && (type === 'match_scheduled' || (type === 'match_start' && !data.plannedAnnouncement))) {
+    content = '@everyone';
+    allowedMentions.parse = ['everyone'];
   }
   return { content, embeds: [embed], allowedMentions };
 }

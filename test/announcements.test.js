@@ -63,11 +63,11 @@ test('match_cancelled: ne olduğu ve sıradaki adım birlikte verilir', () => {
 
 /* ---------------- test etiketi ve etiketleme güvenliği ---------------- */
 
-test('test eventleri her tipte TEST etiketi taşır', () => {
+test('duyuru başlıklarında TEST etiketi görünmez', () => {
   for (const type of ['match_scheduled', 'match_start', 'match_end', 'match_cancelled',
     'phase_change', 'tier_change', 'punishment', 'link_removed', 'host_message']) {
-    const e = embedOf(type, { phase: 'pvp', startsAt: Date.now(), action: 'ban' }, true);
-    assert.match(e.title, /TEST/, `${type} test etiketi taşımalı`);
+    const e = embedOf(type, { phase: 'pvp', startsAt: Date.now(), action: 'ban', message: 'Host duyurusu' }, true);
+    assert.doesNotMatch(e.title, /TEST/, `${type} temiz başlık taşımalı`);
   }
 });
 
@@ -93,4 +93,14 @@ test('aşırı uzun oyuncu adı ve sebep embed\'i kırmaz', () => {
 
 test('bilinmeyen event tipi duyuru üretmez', () => {
   assert.equal(buildAnnouncement('bilinmeyen', {}, false), null);
+});
+
+
+test('normal maç duyurusu everyone atar; test, planlı başlangıç ve maç içi olaylar atmaz',()=>{
+ const schedule=buildAnnouncement('match_scheduled',{startsAt:Date.now(),host:'Atom'},false);
+ assert.equal(schedule.content,'@everyone');assert.deepEqual(schedule.allowedMentions.parse,['everyone']);
+ assert.equal(buildAnnouncement('match_start',{players:12},false).content,'@everyone');
+ assert.equal(buildAnnouncement('match_start',{players:12,plannedAnnouncement:true},false).content,undefined);
+ for(const type of ['match_scheduled','match_start'])assert.deepEqual(buildAnnouncement(type,{startsAt:Date.now()},true).allowedMentions.parse,[]);
+ for(const type of ['match_end','phase_change','host_message'])assert.deepEqual(buildAnnouncement(type,{phase:'pvp',message:'duyuru'},false).allowedMentions.parse,[]);
 });
