@@ -44,6 +44,7 @@ public final class FeatureBridge {
    var page=service.listLinks(offset,25);
    for(var link:page.links()) {
     JsonObject x=new JsonObject();x.addProperty("uuid",link.uuid().toString());x.addProperty("discordId",link.discordId());
+    x.addProperty("online",Bukkit.getPlayer(link.uuid())!=null);
     x.addProperty("participant",active&&match.isParticipant(link.uuid()));x.addProperty("alive",match.isAlive(link.uuid()));
     Integer team=p.getTeams().getTeam(link.uuid());if(team!=null)x.addProperty("team",team);
     links.add(x);

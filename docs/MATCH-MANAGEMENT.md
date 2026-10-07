@@ -1,4 +1,4 @@
-# Maç ve takım yönetimi — 1.2.7
+# Maç ve takım yönetimi — 1.2.8
 
 Bot ve JAR birlikte kullanılmalıdır. JAR tabanı kullanıcının gönderdiği 1.2.6-fixes dosyasıdır; yalnız ilgili sınıflar ve metadata yenilenmiştir.
 
@@ -14,7 +14,15 @@ Kategori `1522215362857406654`. Aktif veya planlanmış maç varsa **Takım Geç
 
 Botta **Kanalları Yönet**, **Rolleri Yönet**, **Üyeleri Taşı**, **Bağlan** izinleri ve GuildVoiceStates intent'i gerekir. Discord yöneticileri platform gereği kanal izinlerini aşabilir; bot yönetilen seslerde bağlantısız üyeleri ayırır. Kategoride en fazla 50 kanal olabilir; diğer mevcut kanallar korunur.
 
-Bot yalnız Discord sesine bağlı kişileri taşıyabilir. Maç başlarken katılımcılar mevcut seslerinden taşınır. Sonrasında sistemin seslerindeki takım değişimleri, ölüm ve diriltmeler en fazla yaklaşık 5 saniyede izlenir. Sesten ayrılan oyuncu tekrar Takım Geçiş'e girdiğinde güncel durumuna yönlendirilir. Maçta olmayan bağlı kullanıcı girişte bekler. Son maç/plan bitince yalnız sistemin oluşturduğu kanallar kaldırılır. Köprü koparsa kanallar korunur ve eski durumla yönlendirme yapılmaz.
+Bot yalnız Discord sesine bağlı kişileri taşıyabilir. Maç başlarken katılımcılar mevcut seslerinden taşınır. Sonrasında sistemin seslerindeki takım değişimleri, ölüm ve diriltmeler en fazla yaklaşık 5 saniyede izlenir. Sesten ayrılan oyuncu tekrar Takım Geçiş'e girdiğinde güncel durumuna yönlendirilir. Minecraft hesabı çevrimdışı olan veya aktif maçta katılımcı olmayan bağlı kullanıcı **Global Ses** (`1522216892658614272`) kanalına gider. İki hesabı bağlı kullanıcı o anda çevrimiçi hesabına göre yönlendirilir; maç katılımcısı olan çevrimiçi hesap önceliklidir. Son maç/plan bitince kullanıcılar global sese taşınır ve yalnız sistemin oluşturduğu kanallar kaldırılır. Köprü koparsa kanallar korunur ve eski durumla yönlendirme yapılmaz.
+
+## Hesaplar ve giriş sınırları
+
+Bir Discord hesabına iki Minecraft hesabı bağlanabilir. Her Minecraft UUID'si yalnız bir Discord'a bağlıdır; üçüncü MC hesabı reddedilir. Discord `/link` ve yönetici `/linkbilgi` iki hesabı gösterir. Bir hesabı kaldırmak diğerini etkilemez. İki hesaplı kullanıcıdan bağlantı kaldırılırken MC adı/UUID'si seçilmelidir; Discord ID ile belirsiz kaldırma işlem yapmaz. Eski tek kullanımlık kod, replay ve unlink sürüm korumaları devam eder.
+
+Minecraft sunucusunda aynı IP'den aynı anda tek oyuncu bulunabilir. Giriş sırasında IP rezerve edilir; diğer oyuncu lobi dahil girişte reddedilir. Çıkış/başarısız giriş rezervasyonu bırakır. IP kayıtları kalıcı saklanmaz.
+
+Takım Geçiş'e bir dakikalık kayan pencerede onuncu giriş, o kullanıcıya bir dakikalık giriş engeli verir ve kullanıcıyı global sese taşır. Botun taşımaları sayılmaz; engellenmiş tekrar denemeler süreyi uzatmaz. Engel ve önceki kişisel Bağlan izni DB'de saklanır, bot restart'ından sonra korunur. Süre bitince izin otomatik eski haline döner. Global Ses ve sunucudaki diğer sesler bu engelle kilitlenmez.
 
 ## Ses testi
 
@@ -26,6 +34,6 @@ Temiz başlıklar kullanılır; TEST ön eki yoktur. Gerçek plan duyurusu `@eve
 
 ## Derleme ve geri dönüş
 
-`python3 plugin-patch/build.py BASE.jar dist/NautilusUHC-1.2.7-voice-admin.jar --java-bin JDK21/bin --api-dir SERVER_API_LIBRARIES`
+`python3 plugin-patch/build.py BASE.jar dist/NautilusUHC-1.2.8-accounts-voice.jar --java-bin JDK21/bin --api-dir SERVER_API_LIBRARIES`
 
-Sunucudaki gerçek Paper/Leaf API ve Adventure/Gson bağımlılıkları derlemede kullanılır, JAR'a katılmaz. Araç değiştirilmeyen girişleri birebir karşılaştırır. Tek NautilusUHC JAR'ı kullanılmalıdır. Geri dönüşte sunucu durdurulup yedek 1.2.6 JAR'ı geri konur; mevcut DB korunur. Yeni kişisel tercih dosyası eski sürümce yok sayılır. Bot değişikliklerini de geri almak gerekirse Git commit'i geri alınabilir.
+Sunucudaki gerçek Paper/Leaf API ve Adventure/Gson bağımlılıkları derlemede kullanılır, JAR'a katılmaz. Araç değiştirilmeyen girişleri birebir karşılaştırır. Tek NautilusUHC JAR'ı kullanılmalıdır. 1.2.8 veritabanında Discord ID tekillik sınırı kaldırılır ve iki hesap sınırı eklenir. Eski sürüme geri dönüşte sunucu durdurulup güncelleme öncesi JAR ve DB yedeği birlikte geri konmalıdır; sonradan yapılan bağlantı değişiklikleri bu yedekte bulunmaz. Yeni kişisel tercih dosyası eski sürümce yok sayılır. Bot değişikliklerini de geri almak gerekirse Git commit'i geri alınabilir.

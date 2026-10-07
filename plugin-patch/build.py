@@ -3,7 +3,7 @@
 import argparse, pathlib, subprocess, tempfile, zipfile, re, hashlib
 p=argparse.ArgumentParser();p.add_argument('input');p.add_argument('output');p.add_argument('--java-bin',required=True);p.add_argument('--api-dir',required=True)
 a=p.parse_args();root=pathlib.Path(__file__).resolve().parent
-sources=[x for x in (root/'src').rglob('*.java') if '/discordlink/' not in str(x) and x.name!='BridgeInstance.java']
+sources=[x for x in (root/'src').rglob('*.java') if x.name!='BridgeInstance.java']
 with tempfile.TemporaryDirectory(prefix='nautilus-build-') as tmp:
  cp=':'.join([a.input]+[str(x) for x in pathlib.Path(a.api_dir).rglob('*.jar')])
  subprocess.run([a.java_bin+'/javac','-encoding','UTF-8','--release','21','-cp',cp,'-d',tmp]+[str(x) for x in sources],check=True)
@@ -17,8 +17,9 @@ with tempfile.TemporaryDirectory(prefix='nautilus-build-') as tmp:
    if replaced(n):continue
    data=base.read(n)
    if n=='plugin.yml':
-    text=data.decode();text=re.sub(r'(?m)^version:.*$','version: 1.2.7',text)
-    text=text.replace('commands:\n','commands:\n  teamadmin:\n    description: Takımları yönetim panelinden düzenler\n    usage: /teamadmin\n    permission: nautilus.host\n\n',1);data=text.encode()
+    text=data.decode();text=re.sub(r'(?m)^version:.*$','version: 1.2.8',text)
+    if not re.search(r'(?m)^  teamadmin:',text):text=text.replace('commands:\n','commands:\n  teamadmin:\n    description: Takımları yönetim panelinden düzenler\n    usage: /teamadmin\n    permission: nautilus.host\n\n',1)
+    data=text.encode()
    if n=='config.yml':data=re.sub(rb'(?m)^(\s*token:\s*).+$',rb'\1""',data)
    out.writestr(entry,data)
   for n,data in classes.items():out.writestr(n,data)

@@ -176,13 +176,15 @@ public final class LinkBridgeApi {
         UUID uuid;
         boolean resolved;
         String discordFilter = null;
+        List<LinkService.LinkRecord> discordLinks = null;
         if (query.containsKey("uuid")) {
             uuid = LinkService.parseUuid(query.get("uuid"));
             link = this.links.recordByUuid(uuid).orElse(null);
             resolved = true;
         } else if (query.containsKey("discord")) {
             discordFilter = discordValue(query.get("discord"));
-            link = this.links.recordByDiscord(discordFilter).orElse(null);
+            discordLinks = this.links.recordsByDiscord(discordFilter);
+            link = discordLinks.isEmpty() ? null : discordLinks.getFirst();
             uuid = link == null ? null : link.uuid();
             resolved = link != null;
         } else if (query.containsKey("name")) {
@@ -199,9 +201,11 @@ public final class LinkBridgeApi {
         out.put("resolved", resolved);
         out.put("uuid", uuid == null ? null : uuid.toString());
         out.put("link", linkJson(link));
+        out.put("links", (discordLinks != null ? discordLinks : link == null ? List.<LinkService.LinkRecord>of() : List.of(link))
+                .stream().map(LinkBridgeApi::linkJson).toList());
         if (uuid != null) out.put("epoch", this.links.epoch(uuid));
         List<LinkService.LinkEvent> recent = uuid != null || discordFilter != null
-                ? this.links.history(uuid, uuid == null ? discordFilter : null, 5, null)
+                ? this.links.history(discordFilter == null ? uuid : null, discordFilter, 5, null)
                 : List.of();
         out.put("recentEvents", recent.stream().map(LinkBridgeApi::eventJson).toList());
         return respond(200, out, requestId);

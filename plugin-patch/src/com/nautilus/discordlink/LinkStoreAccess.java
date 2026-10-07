@@ -23,7 +23,7 @@ import java.util.UUID;
  * hata IllegalStateException olarak yukarı taşınır; altyapı arızası "kod
  * geçersiz" ya da "bağlantı yok" diye maskelenmez.
  *
- * Şema değişiklikleri yalnız eklemelidir (eski JAR yeni sütun/tabloları yok sayar):
+ * Şema geçişi Discord başına iki hesabı destekler ve eski yazıcıları trigger ile sınırlar:
  *  - discord_links.link_id        : her bağlantı oluşturmanın değişmez sürümü
  *  - discord_link_epochs          : UUID başına unlink sayacı (eski kod/makbuz iptali)
  *  - discord_link_events          : link/unlink denetim geçmişi (ham kod saklanmaz)
@@ -60,25 +60,31 @@ final class LinkStoreAccess {
         }
     }
 
-    record MigrationReport(boolean linkIdColumnAdded, File backup, boolean backupSucceeded) { }
+    record MigrationReport(boolean linkIdColumnAdded, boolean capacityMigrated, File backup, boolean backupSucceeded) { }
 
     @FunctionalInterface
     interface SqlWork<T> {
         T run(Connection connection) throws SQLException;
     }
 
-    /** Eklemeli şema geçişi. link_id sütunu ilk kez eklenecekse önce DB yedeği alınır. */
+    /** Schema migration; back up before adding link_id or rebuilding the one-account constraint. */
     MigrationReport migrate(File backupDirectory, long now) {
         boolean needsColumn = read(connection -> !columnExists(connection, "discord_links", "link_id"));
+        boolean needsRebuild = read(LinkStoreAccess::hasUniqueDiscordIndex);
         File backup = null;
         boolean backupSucceeded = true;
-        if (needsColumn && backupDirectory != null) {
-            backup = new File(backupDirectory, "nautilus-main-pre-link-1.2.2-" + now + ".db");
+        if ((needsColumn || needsRebuild) && backupDirectory != null) {
+            backup = new File(backupDirectory, "nautilus-main-pre-link-1.2.8-" + now + ".db");
             //noinspection ResultOfMethodCallIgnored
             backupDirectory.mkdirs();
             backupSucceeded = this.store.backupTo(backup);
         }
         inTransaction(connection -> {
+            // Acquire the SQLite writer lock before inspecting/rebuilding the schema.
+            try (Statement lock = connection.createStatement()) {
+                lock.executeUpdate("UPDATE discord_links SET linked_at = linked_at WHERE 0");
+            }
+            if (hasUniqueDiscordIndex(connection)) rebuildDiscordLinks(connection);
             try (Statement statement = connection.createStatement()) {
                 if (!columnExists(connection, "discord_links", "link_id")) {
                     statement.executeUpdate("ALTER TABLE discord_links ADD COLUMN link_id TEXT");
@@ -102,10 +108,28 @@ final class LinkStoreAccess {
             try (Statement statement = connection.createStatement()) {
                 statement.executeUpdate("CREATE UNIQUE INDEX IF NOT EXISTS idx_links_link_id "
                         + "ON discord_links(link_id)");
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_links_discord ON discord_links(discord_id)");
+                // DataStore.linkCreate uses an UPSERT, so exclude its own UUID from the capacity count.
+                statement.executeUpdate("CREATE TRIGGER IF NOT EXISTS discord_links_capacity_insert "
+                        + "BEFORE INSERT ON discord_links WHEN "
+                        + "(SELECT COUNT(*) FROM discord_links WHERE discord_id=NEW.discord_id AND uuid<>NEW.uuid)>=2 "
+                        + "BEGIN SELECT RAISE(ABORT, 'discord_account_limit'); END");
+                statement.executeUpdate("CREATE TRIGGER IF NOT EXISTS discord_links_capacity_update "
+                        + "BEFORE UPDATE OF discord_id ON discord_links WHEN "
+                        + "(SELECT COUNT(*) FROM discord_links WHERE discord_id=NEW.discord_id AND uuid<>OLD.uuid)>=2 "
+                        + "BEGIN SELECT RAISE(ABORT, 'discord_account_limit'); END");
+                statement.executeUpdate("CREATE TRIGGER IF NOT EXISTS discord_links_owner_insert "
+                        + "BEFORE INSERT ON discord_links WHEN EXISTS "
+                        + "(SELECT 1 FROM discord_links WHERE uuid=NEW.uuid AND discord_id<>NEW.discord_id) "
+                        + "BEGIN SELECT RAISE(ABORT, 'minecraft_account_owned'); END");
+                statement.executeUpdate("CREATE TRIGGER IF NOT EXISTS discord_links_owner_update "
+                        + "BEFORE UPDATE OF discord_id, uuid ON discord_links "
+                        + "WHEN OLD.discord_id<>NEW.discord_id OR OLD.uuid<>NEW.uuid "
+                        + "BEGIN SELECT RAISE(ABORT, 'minecraft_account_owned'); END");
             }
             return null;
         });
-        return new MigrationReport(needsColumn, backup, backupSucceeded);
+        return new MigrationReport(needsColumn, needsRebuild, backup, backupSucceeded);
     }
 
     <T> T inTransaction(SqlWork<T> work) {
@@ -152,7 +176,16 @@ final class LinkStoreAccess {
     }
 
     LinkService.LinkRecord byDiscord(Connection connection, String discordId) throws SQLException {
-        return queryOne(connection, LINK_SELECT + "WHERE l.discord_id = ? LIMIT 1", discordId);
+        List<LinkService.LinkRecord> links = recordsByDiscord(connection, discordId);
+        return links.isEmpty() ? null : links.getFirst();
+    }
+
+    List<LinkService.LinkRecord> recordsByDiscord(Connection connection, String discordId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                LINK_SELECT + "WHERE l.discord_id = ? ORDER BY l.linked_at ASC, l.uuid ASC")) {
+            statement.setString(1, discordId);
+            return readLinks(statement);
+        }
     }
 
     /**
@@ -386,6 +419,59 @@ final class LinkStoreAccess {
     /* ------------------------------------------------------------------ */
     /* Yardımcılar                                                           */
     /* ------------------------------------------------------------------ */
+
+    private static Set<String> uniqueDiscordIndexes(Connection connection) throws SQLException {
+        Set<String> indexes = new LinkedHashSet<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("PRAGMA index_list(discord_links)")) {
+            while (result.next()) {
+                if (result.getInt("unique") == 0) continue;
+                String name = result.getString("name");
+                List<String> columns = new ArrayList<>();
+                try (Statement details = connection.createStatement();
+                     ResultSet info = details.executeQuery("PRAGMA index_info(" + quoteIdentifier(name) + ")")) {
+                    while (info.next()) columns.add(info.getString("name"));
+                }
+                if (columns.size() == 1 && "discord_id".equalsIgnoreCase(columns.getFirst())) indexes.add(name);
+            }
+        }
+        return indexes;
+    }
+
+    private static boolean hasUniqueDiscordIndex(Connection connection) throws SQLException {
+        return !uniqueDiscordIndexes(connection).isEmpty();
+    }
+
+    /** Rebuild inside the migration transaction; retain every column, row, version and unrelated index/trigger. */
+    private static void rebuildDiscordLinks(Connection connection) throws SQLException {
+        Set<String> droppedIndexes = uniqueDiscordIndexes(connection);
+        String definition = null;
+        List<String> schemaObjects = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("SELECT type, name, sql FROM sqlite_master "
+                     + "WHERE tbl_name='discord_links' AND sql IS NOT NULL ORDER BY type, name")) {
+            while (result.next()) {
+                if ("table".equals(result.getString("type"))) definition = result.getString("sql");
+                else if (!droppedIndexes.contains(result.getString("name"))) schemaObjects.add(result.getString("sql"));
+            }
+        }
+        if (definition == null) throw new SQLException("discord_links schema missing");
+        String migrated = definition.replaceFirst("(?is)^(CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)(?:[\"`\\[]?discord_links[\"`\\]]?)", "$1discord_links_two_accounts");
+        migrated = migrated.replaceAll("(?i)(\\bdiscord_id\\s+TEXT\\s+(?:NOT\\s+NULL\\s+)?)UNIQUE\\b", "$1");
+        migrated = migrated.replaceAll("(?i),\\s*(?:CONSTRAINT\\s+\\w+\\s+)?UNIQUE\\s*\\(\\s*discord_id\\s*\\)", "");
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate(migrated);
+            statement.executeUpdate("INSERT INTO discord_links_two_accounts SELECT * FROM discord_links");
+            statement.executeUpdate("DROP TABLE discord_links");
+            statement.executeUpdate("ALTER TABLE discord_links_two_accounts RENAME TO discord_links");
+            for (String sql : schemaObjects) statement.executeUpdate(sql);
+        }
+        if (hasUniqueDiscordIndex(connection)) throw new SQLException("Discord uniqueness migration failed");
+    }
+
+    private static String quoteIdentifier(String value) {
+        return "\"" + value.replace("\"", "\"\"") + "\"";
+    }
 
     private static boolean columnExists(Connection connection, String table, String column) throws SQLException {
         try (Statement statement = connection.createStatement();

@@ -70,8 +70,13 @@ public final class LinkBridgeApiTest {
 
             UUID second = UUID.randomUUID();
             String code2 = links.issueCode(second, "Ikinci", "mc-test").code();
-            Map<String, Object> taken = call(api, "POST", "/api/link/v2/verify",
+            Map<String, Object> secondLinked = call(api, "POST", "/api/link/v2/verify",
                     "{\"code\":\"" + code2 + "\",\"discordId\":\"" + X + "\"}");
+            require(status(secondLinked) == 200, "ikinci hesap bağlanmalı: " + secondLinked);
+            UUID third = UUID.randomUUID();
+            String code3 = links.issueCode(third, "Ucuncu", "mc-test").code();
+            Map<String, Object> taken = call(api, "POST", "/api/link/v2/verify",
+                    "{\"code\":\"" + code3 + "\",\"discordId\":\"" + X + "\"}");
             require(status(taken) == 409 && "discord_already_linked".equals(taken.get("error"))
                     && player.toString().equals(map(taken.get("link")).get("uuid")), "zaten bağlı: " + taken);
         }

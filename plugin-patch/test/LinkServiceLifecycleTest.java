@@ -60,7 +60,7 @@ public final class LinkServiceLifecycleTest {
         scenario("S18 aktif liste en son eşleşen önce, eşit zamanda UUID ile kararlı sayfalar", LinkServiceLifecycleTest::listOrderingAndPaging);
         scenario("S19 geçmiş oyuncu/Discord filtresi ve sayfalama", LinkServiceLifecycleTest::historyFilters);
         scenario("S20 eski biçimli kod uyumlu; unlink sonrası dosya güncellemesi kaybolsa da reddedilir", LinkServiceLifecycleTest::legacyCodeAndLostFileUpdate);
-        scenario("S21 eklemeli şema geçişi ve ön yedek", LinkServiceLifecycleTest::migrationAndBackup);
+        scenario("S21 iki hesap şema geçişi ve ön yedek", LinkServiceLifecycleTest::migrationAndBackup);
 
         if (!FAILURES.isEmpty()) {
             System.out.println("FAIL LinkServiceLifecycleTest (" + FAILURES.size() + " senaryo)");
@@ -206,12 +206,15 @@ public final class LinkServiceLifecycleTest {
                 awaitBlocked(secondThread);
                 gate.release();
                 requireLinked(first.get(10, TimeUnit.SECONDS), a, X, true);
-                LinkService.VerifyResult taken = second.get(10, TimeUnit.SECONDS);
-                require(taken instanceof LinkService.VerifyResult.DiscordAlreadyLinked d && d.link().uuid().equals(a),
-                        "aynı Discord ikinci hesaba bağlanmamalı: " + taken);
-                require(links.recordByUuid(b).isEmpty(), "B bağlanmamalı");
-                require(links.probe(codeB, null).holder(), "B'nin kodu tüketilmemeli");
-                requireLinked(links.verify(request(codeB, Y, null)), b, Y, true);
+                requireLinked(second.get(10, TimeUnit.SECONDS), b, X, true);
+                UUID c = UUID.randomUUID();
+                String codeC = links.issueCode(c, "OyuncuC", "mc-live").code();
+                LinkService.VerifyResult taken = links.verify(request(codeC, X, null));
+                require(taken instanceof LinkService.VerifyResult.DiscordAlreadyLinked,
+                        "aynı Discord üçüncü hesaba bağlanmamalı: " + taken);
+                require(links.recordByUuid(c).isEmpty(), "C bağlanmamalı");
+                require(links.probe(codeC, null).holder(), "C'nin kodu tüketilmemeli");
+                requireLinked(links.verify(request(codeC, Y, null)), c, Y, true);
             } finally {
                 pool.shutdownNow();
             }
@@ -590,7 +593,7 @@ public final class LinkServiceLifecycleTest {
             Path backups = env.root.resolve("backups");
             long backupCount;
             try (var files = Files.list(backups)) {
-                backupCount = files.filter(p -> p.getFileName().toString().startsWith("nautilus-main-pre-link-1.2.2-")).count();
+                backupCount = files.filter(p -> p.getFileName().toString().startsWith("nautilus-main-pre-link-1.2.8-")).count();
             }
             require(backupCount == 1, "ilk geçişte bir ön yedek alınmalı (" + backupCount + ")");
             env.service();

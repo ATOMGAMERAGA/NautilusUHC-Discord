@@ -201,6 +201,27 @@ test('I1 gerçek JAR + SQLite: iki hesap doğru çiftlerle bağlanır ve geri ok
   assert.ok(live.handled('/api/link/v2/info').length >= 2, 'başarılar geri okunmalı');
 });
 
+test('I1b one Discord links two UUIDs, rejects a third and unlinks one without changing the other', { skip }, async () => {
+  const [live] = await fresh('mc-live');
+  const client = api();
+  const thirdUuid = '00000000-0000-4000-8000-00000000000c';
+  const a = await verify(client, await live.issue(UUID_A, 'FirstAccount'), DC_A);
+  const b = await verify(client, await live.issue(UUID_B, 'SecondAccount'), DC_A);
+  assert.equal(a.outcome, 'linked');
+  assert.equal(b.outcome, 'linked', JSON.stringify(b.failure));
+  const status = await client.linkInfo('discord', DC_A, { targetInstance: 'mc-live' });
+  assert.deepEqual(status.links.map((link) => link.uuid).sort(), [UUID_A, UUID_B]);
+  const third = await verify(client, await live.issue(thirdUuid, 'ThirdAccount'), DC_A);
+  assert.equal(third.outcome, 'failed');
+  const ambiguous = await client.linkUnlinkV2({ selector: 'discord', value: DC_A,
+    actor: { type: 'discord_staff', id: '900000000000000001' }, requestId: 'two-ambiguous' }, { targetInstance: 'mc-live' });
+  assert.equal(ambiguous.ok, false);
+  const removed = await client.linkUnlinkV2({ selector: 'uuid', value: UUID_B, expectedLinkId: b.link.linkId,
+    actor: { type: 'discord_staff', id: '900000000000000001' }, requestId: 'two-remove' }, { targetInstance: 'mc-live' });
+  assert.equal(removed.ok, true);
+  assert.equal((await live.state(UUID_A)).linkId, a.link.linkId);
+});
+
 test('I2 aynı kapsamı paylaşan iki bağımsız depoda kasıtlı aynı kod: hiçbir hesap eşlenmez', { skip }, async () => {
   const [b, a559] = await fresh('mc-b', 'mc-a-559');
   const client = api();

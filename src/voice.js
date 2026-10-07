@@ -3,35 +3,58 @@ import { ChannelType, Events, PermissionFlagsBits as P } from 'discord.js';
 import { config } from './config.js';
 import { getSetting, setSetting } from './db.js';
 import { mcapi } from './mcapi.js';
-import { destination, channelSpecs } from './voicecore.js';
+import { destination, channelSpecs, selectVoiceLink } from './voicecore.js';
 
+import { createEntryGuard } from './voiceentry.js';
+import { createEntryPermissionManager } from './voiceentrypermissions.js';
+
+export const GLOBAL_VOICE='1522216892658614272';
 export const VOICE_CATEGORY = '1522215362857406654';
 const REGISTRY_KEY = 'uhc_voice_registry_v1';
 export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGISTRY_KEY,''),
-  write=value=>setSetting(REGISTRY_KEY,value), guildId=config.guildId, logger=console, sleep=sleepFor}={}) {
+  write=value=>setSetting(REGISTRY_KEY,value), guildId=config.guildId, logger=console, sleep=sleepFor, now=Date.now,
+  readGuard=()=>getSetting('uhc_voice_entry_guard_v1',''),writeGuard=v=>setSetting('uhc_voice_entry_guard_v1',v)}={}) {
   let registry;
   try {registry=JSON.parse(read() || '{}');} catch {registry={};}
   registry.channels ??= {};
   registry.linked ??= [];
   registry.permissions = {}; // Reapply the owned permission policy after every bot restart.
-  let snapshot=null, busy=null, timer=null, testSession=null;
+  let snapshot=null, busy=null, timer=null, expiryTimer=null, testSession=null;
+  const guard=createEntryGuard({now,read:readGuard,write:writeGuard});
+  const entryPermissions=createEntryPermissionManager(guard);
+  const botMoves=new Map();
   const save=()=>write(JSON.stringify(registry));
   const ownedIds=()=>new Set(Object.values(registry.channels));
   const guild=()=>client.guilds.cache.get(guildId);
+  function scheduleExpiry() {
+    clearTimeout(expiryTimer);
+    const deadlines=guard.blocks().map(b=>b.until);if(!deadlines.length)return;
+    expiryTimer=setTimeout(()=>tick(),Math.max(100,Math.min(...deadlines)-now()));expiryTimer.unref();
+  }
 
   async function move(member, id) {
     if (!member?.voice?.channelId || member.voice.channelId === id) return;
-    await member.voice.setChannel(id, 'UHC oyun durumuna göre ses yönlendirmesi');
+    const movement={from:member.voice.channelId,to:id,until:now()+30000};
+    const moves=(botMoves.get(member.id)??[]).filter(m=>m.until>now());moves.push(movement);botMoves.set(member.id,moves);
+    try{await member.voice.setChannel(id, 'UHC oyun durumuna göre ses yönlendirmesi');}
+    catch(err){botMoves.set(member.id,moves.filter(m=>m!==movement));throw err;}
   }
+  function consumeBotMove(id,from,to) {
+    const moves=(botMoves.get(id)??[]).filter(m=>m.until>now());
+    const i=moves.findIndex(m=>m.from===from&&m.to===to);if(i>=0)moves.splice(i,1);
+    if(moves.length)botMoves.set(id,moves);else botMoves.delete(id);return i>=0;
+  }
+  const globalId=()=>guild()?.channels.cache.get(GLOBAL_VOICE)?.type===ChannelType.GuildVoice?GLOBAL_VOICE:null;
   async function route(member) {
+    if(member?.voice?.channelId&&ownedIds().has(member.voice.channelId)&&guard.blocked(member.id)){await move(member,globalId());return;}
     if (!snapshot || !member?.voice?.channelId || (testSession?.id===member.id&&!testSession.cancel)) return;
-    const link=snapshot.links.find(l=>l.discordId===member.id);
+    const link=selectVoiceLink(snapshot.links,member.id);
     if (!link) {
       if (ownedIds().has(member.voice.channelId)) await move(member,null);
       return;
     }
     const key=destination(snapshot,link);
-    const id=registry.channels[key ?? 'entry'];
+    const id=key==='global'?globalId():registry.channels[key ?? 'entry'];
     if (id && ownedIds().has(member.voice.channelId)) await move(member,id);
   }
   async function cleanup(g) {
@@ -39,7 +62,7 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
     for (const [key,id] of Object.entries(registry.channels)) {
       const c=g.channels.cache.get(id);
       if(c) {
-        for(const member of c.members?.values?.() ?? []) await move(member,null);
+        for(const member of c.members?.values?.() ?? []) await move(member,(testSession?.id===member.id&&!testSession.cancel)?null:globalId());
         await c.delete('UHC: aktif veya planlanmış maç kalmadı');
       }
       delete registry.channels[key]; save();
@@ -91,21 +114,24 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
       const signature=JSON.stringify(overwrites,(_,v)=>typeof v==='bigint'?v.toString():v);
       registry.permissions ??= {};
       if(registry.permissions[c.id]!==signature) {
-        await c.permissionOverwrites.set(overwrites);
+        await c.permissionOverwrites.set([...overwrites,
+          ...[...(c.permissionOverwrites.cache?.values()??[])].filter(o=>spec.key==='entry'&&o.type===1&&o.id!==client.user.id)]);
         registry.permissions[c.id]=signature;
       }
     }
+    await entryPermissions.sync(g,registry.channels.entry);
     const order=specs.map((s,index)=>({channel:registry.channels[s.key],position:index}));
     const orderKey=JSON.stringify(order);
     if(registry.order!==orderKey) {await g.channels.setPositions(order);registry.order=orderKey;}
     const starting=state.active && registry.matchKey!==state.matchKey;
     snapshot=state;
     // Only take players from arbitrary voice channels once at match start.
-    for(const link of state.links) {
-      const m=g.members.cache.get(link.discordId);
+    for(const id of linked) {
+      const link=selectVoiceLink(state.links,id);
+      const m=g.members.cache.get(id);
       if(!m?.voice?.channelId || (testSession?.id===m.id&&!testSession.cancel)) continue;
       const target=destination(state,link);
-      if(starting&&target) await move(m,registry.channels[target]);
+      if(starting&&target&&target!=='global'&&!guard.blocked(m.id)) await move(m,registry.channels[target]);
       else await route(m);
     }
     for(const vs of g.voiceStates.cache.values()) {
@@ -124,6 +150,8 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
   async function tick() {
     if(busy) return busy;
     busy=(async()=>{
+      await entryPermissions.sync(guild(),registry.channels.entry);
+      for(const [id,moves] of botMoves){const pending=moves.filter(m=>m.until>now());if(pending.length)botMoves.set(id,pending);else botMoves.delete(id);}
       const res=await api.voiceSnapshot();
       if(!res.ok) {snapshot=null;if(testSession)testSession.cancel='Minecraft köprüsüne ulaşılamadı; test durduruldu.';return;} // Outages must not delete channels or route using stale state.
       if(!Array.isArray(res.links)||!Array.isArray(res.teams)||typeof res.enabled!=='boolean'||typeof res.active!=='boolean'||(res.active&&typeof res.matchKey!=='string')) {
@@ -141,14 +169,27 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
         }
       }
       await reconcile(res);
-    })().catch(err=>{snapshot=null;if(testSession)testSession.cancel='Ses testi hazırlanırken bir hata oluştu. Botun kanal ve taşıma izinlerini kontrol et.';logger.error('[ses]',err.message);}).finally(()=>{busy=null;});
+    })().catch(err=>{snapshot=null;if(testSession)testSession.cancel='Ses testi hazırlanırken bir hata oluştu. Botun kanal ve taşıma izinlerini kontrol et.';logger.error('[ses]',err.message);}).finally(()=>{busy=null;scheduleExpiry();});
     return busy;
   }
   async function voiceChanged(oldState,newState) {
-    if(newState.guild.id!==guildId||oldState.channelId===newState.channelId||!ownedIds().has(newState.channelId))return;
-    await tick(); await route(newState.member);
+    if(newState.guild.id!==guildId||oldState.channelId===newState.channelId)return;
+    const botMove=consumeBotMove(newState.id??newState.member?.id,oldState.channelId,newState.channelId);
+    if(!ownedIds().has(newState.channelId))return;
+    const member=newState.member;if(!member)return;
+    if(newState.channelId===registry.channels.entry&&!botMove) {
+      const admission=guard.attempt(member.id);
+      if(admission.blocked) {
+        if(testSession?.id===member.id)testSession.cancel='Çok fazla ses girişi: bir dakika beklemelisin.';
+        await entryPermissions.sync(guild(),registry.channels.entry);scheduleExpiry();
+        await move(member,globalId());return;
+      }
+    }
+    if(guard.blocked(member.id)){await move(member,globalId());return;}
+    await tick(); await route(member);
   }
   async function runTest(member,{onReady=async()=>{}}={}) {
+    if(guard.blocked(member.id))return {ok:false,message:'Ses giriş engelin sürüyor. Bir dakika dolunca tekrar dene.'};
     if(testSession) return {ok:false,message:'Başka bir ses testi sürüyor. Bitmesini bekle.'};
     const session={id:member.id,ready:false,cancel:null};testSession=session;
     const origin=member.voice?.channelId;
@@ -198,5 +239,5 @@ export function createVoiceManager({client, api=mcapi, read=()=>getSetting(REGIS
     client.on(Events.GuildMemberAdd,()=>tick());
     tick(); timer=setInterval(tick,5000);timer.unref();
   }
-  return {tick,start,runTest,stop:()=>clearInterval(timer),voiceChanged};
+  return {tick,start,runTest,stop:()=>{clearInterval(timer);clearTimeout(expiryTimer);},voiceChanged};
 }

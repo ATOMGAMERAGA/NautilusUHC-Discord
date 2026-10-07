@@ -150,13 +150,13 @@ public final class LinkService {
             Path parent = this.pendingFile.getParent();
             File backupDirectory = parent == null ? null : parent.resolve("backups").toFile();
             LinkStoreAccess.MigrationReport report = this.linkStore.migrate(backupDirectory, System.currentTimeMillis());
-            if (report.linkIdColumnAdded()) {
+            if (report.linkIdColumnAdded() || report.capacityMigrated()) {
                 if (report.backupSucceeded()) {
-                    LOG.info("Discord bağlantı şeması 1.2.2'ye yükseltildi; önceki DB yedeği: "
+                    LOG.info("Discord bağlantı şeması 1.2.8'e yükseltildi; önceki DB yedeği: "
                             + (report.backup() == null ? "-" : report.backup().getName()));
                 } else {
                     LOG.warning("Discord bağlantı şeması yükseltildi fakat ön yedek alınamadı. "
-                            + "Değişiklik yalnız eklemelidir; yine de sunucu kapalıyken manuel yedek al.");
+                            + "İki hesap geçişi tabloyu yeniden oluşturur; eski JAR'a dönmek için önceki DB yedeği gerekir.");
                 }
             }
             return null;
@@ -319,9 +319,9 @@ public final class LinkService {
                 return new VerifyDecision(sameOperation ? DecisionKind.CONSUMED_BY_OTHER : DecisionKind.REVOKED,
                         byUuid, sameOperation);
             }
-            LinkRecord byDiscord = this.linkStore.byDiscord(connection, discordId);
-            if (byDiscord != null) {
-                return new VerifyDecision(DecisionKind.DISCORD_TAKEN, byDiscord, false);
+            List<LinkRecord> discordLinks = this.linkStore.recordsByDiscord(connection, discordId);
+            if (discordLinks.size() >= 2) {
+                return new VerifyDecision(DecisionKind.DISCORD_TAKEN, discordLinks.getFirst(), false);
             }
             runHook(this.hooks.beforeLinkCommit);
             String linkId = pending.issuanceId() != null ? pending.issuanceId() : UUID.randomUUID().toString();
@@ -474,7 +474,20 @@ public final class LinkService {
                             resolved = true;
                         }
                         case BY_DISCORD -> {
-                            LinkRecord byDiscord = this.linkStore.byDiscord(connection, value);
+                            List<LinkRecord> discordLinks = this.linkStore.recordsByDiscord(connection, value);
+                            LinkRecord byDiscord = discordLinks.isEmpty() ? null : discordLinks.getFirst();
+                            if (discordLinks.size() > 1) {
+                                if (request.expectedLinkId() == null) {
+                                    this.linkStore.insertEvent(connection, unlinkEvent("ambiguous", null, null,
+                                            null, value, request, actor, reason, now));
+                                    Set<UUID> candidates = new LinkedHashSet<>();
+                                    discordLinks.forEach(link -> candidates.add(link.uuid()));
+                                    return new UnlinkResult.Ambiguous(describeCandidates(connection, candidates));
+                                }
+                                byDiscord = discordLinks.stream()
+                                        .filter(link -> request.expectedLinkId().equals(link.linkId()))
+                                        .findFirst().orElse(byDiscord);
+                            }
                             target = byDiscord == null ? null : byDiscord.uuid();
                             resolved = byDiscord != null;
                         }
@@ -608,6 +621,13 @@ public final class LinkService {
         String id = requireDiscordId(discordId);
         requireStore();
         return Optional.ofNullable(this.linkStore.read(connection -> this.linkStore.byDiscord(connection, id)));
+    }
+
+    /** Stable oldest-first ordering; UUID breaks equal timestamps. */
+    public List<LinkRecord> recordsByDiscord(String discordId) {
+        String id = requireDiscordId(discordId);
+        requireStore();
+        return List.copyOf(this.linkStore.read(connection -> this.linkStore.recordsByDiscord(connection, id)));
     }
 
     public NameResolution resolveName(String name, Collection<UUID> extraCandidates) {

@@ -121,19 +121,22 @@ export async function readDiscordLink(api, discordId, instance = null) {
     const ids = (bridge?.instanceMeta ?? []).map((m) => m.id).filter((id) => id && !id.startsWith('ip:'));
     if (ids.length > 1) targets = ids;
   }
-  let found = null;
+  const links = [];
   for (const target of targets) {
     const info = await api.linkInfo('discord', discordId, { targetInstance: target });
     if (info.ok) {
-      if (info.linked && !found) found = { ...info.link, instance: target };
+      if (info.linked) {
+        const records = Array.isArray(info.links) ? info.links : info.link ? [info.link] : [];
+        links.push(...records.map((link) => ({ ...link, instance: target })));
+      }
       continue;
     }
     if (info.errorCode === 'not_found' || info.status === 404) {
       // 1.2.1 plugin: protokol 2 yok, eski durum ucuna düş.
       const legacy = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance: target });
       if (!legacy.ok) return { ok: false, res: legacy };
-      if (legacy.linked && !found) {
-        found = {
+      if (legacy.linked) {
+        links.push({
           discordId,
           uuid: legacy.uuid ?? null,
           mcName: legacy.mc,
@@ -141,20 +144,20 @@ export async function readDiscordLink(api, discordId, instance = null) {
           linkId: legacy.linkId ?? null,
           linkedAt: legacy.linkedAt ?? null,
           instance: target,
-        };
+        });
       }
       continue;
     }
     return { ok: false, res: info };
   }
-  return { ok: true, linked: Boolean(found), link: found };
+  return { ok: true, linked: links.length > 0, link: links[0] ?? null, links };
 }
 
 /** readDiscordLink'in yan işlemler için hata fırlatan hâli. */
 export async function currentDiscordLink(api, discordId, instance = null) {
   const res = await readDiscordLink(api, discordId, instance);
   if (!res.ok) throw new Error(`bağlantı durumu okunamadı (${res.res?.errorCode ?? 'bilinmiyor'})`);
-  return { linked: res.linked, link: res.link };
+  return { linked: res.linked, link: res.link, links: res.links };
 }
 
 function guildOf(client) {
@@ -181,12 +184,13 @@ export function createDefaultHandlers({ api = mcapi } = {}) {
       if (!Object.keys(roleMap()).length) return 'tier rol eşlemesi yok';
       const guild = guildOf(client);
       const current = await currentDiscordLink(api, payload.discordId, payload.instance);
-      if (!current.linked || (payload.linkId && current.link?.linkId !== payload.linkId)) {
-        return 'bağlantı değişti; eski rol işlemi atlandı';
-      }
-      let tier = current.link?.tier ?? null;
+      const linked = current.links.find((link) => (!payload.linkId || link.linkId === payload.linkId)
+        && (!payload.uuid || link.uuid === payload.uuid));
+      if (!linked) return 'bağlantı değişti; eski rol işlemi atlandı';
+      let tier = linked.tier ?? null;
       if (!tier) {
-        const profile = await api.statsPlayer(`discord=${encodeURIComponent(payload.discordId)}`);
+        const profile = await api.statsPlayer(linked.uuid
+          ? `uuid=${encodeURIComponent(linked.uuid)}` : `discord=${encodeURIComponent(payload.discordId)}`);
         if (!profile.ok) throw new Error(`oyuncu profili okunamadı (${profile.errorCode})`);
         tier = profile.found ? profile.tier : null;
       }

@@ -135,7 +135,9 @@ export function classifyLinkFailure(res = {}) {
       kind: 'already_linked_other',
       errorCode: errorCode || 'conflict',
       title: 'Hesabın Zaten Bağlı',
-      description: 'Discord hesabın zaten başka bir Minecraft hesabına bağlı.\n'
+      description: (errorCode === 'discord_already_linked'
+        ? 'Discord hesabına en fazla iki Minecraft hesabı bağlanabilir; iki hesabın da bağlı.\n'
+        : 'Discord hesabın zaten başka bir Minecraft hesabına bağlı.\n')
         + 'Bağlantıyı değiştirmen gerekiyorsa `/destek aç` ile talep oluştur.',
     };
   }
@@ -451,7 +453,7 @@ async function confirmLinked(context, target, res) {
   }
   for (let attempt = 0; attempt < context.readbackAttempts; attempt++) {
     if (attempt > 0) await context.sleep(context.retryDelayMs);
-    const info = await api.linkInfo('discord', discordId, { targetInstance: target.id });
+    const info = await api.linkInfo('uuid', link.uuid, { targetInstance: target.id });
     if (!info.ok || !fromTarget(info, target.id)) continue;
     const current = info.link;
     if (info.linked && current?.uuid === link.uuid && current?.linkId === link.linkId
@@ -491,7 +493,7 @@ async function legacyCommit(context, target) {
   if (!fromTarget(res, target.id)) {
     return failed(context, 'commit', target.id, classifyLinkFailure({ errorCode: 'wrong_instance' }), res);
   }
-  const status = await api.linkStatus(`discord=${encodeURIComponent(discordId)}`, { targetInstance: target.id });
+  const status = await api.linkStatus(res.uuid ? `uuid=${encodeURIComponent(res.uuid)}` : `discord=${encodeURIComponent(discordId)}`, { targetInstance: target.id });
   if (!status.ok || !fromTarget(status, target.id)) {
     return failed(context, 'readback', target.id, classifyLinkFailure({ errorCode: 'unconfirmed' }), status);
   }

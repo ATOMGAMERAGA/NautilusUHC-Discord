@@ -320,6 +320,11 @@ export function createLinkAdmin({
       + lines.join('\n'), 'Oyuncu Adı Belirsiz')]);
   }
 
+  function ambiguousDiscordPayload(value, links) {
+    return payload([warnEmbed(`<@${value}> hesabına iki Minecraft hesabı bağlı. Kaldırılacak hesabın UUID'siyle tekrar dene:\n\n`
+      + links.map((link) => `${mcText(link)} · \`${link.uuid}\``).join('\n'), 'Minecraft Hesabını Seç')]);
+  }
+
   function notLinkedPayload(selector, value, info) {
     let text;
     if (selector === 'discord') text = `<@${value}> (\`${value}\`) şu anda hiçbir Minecraft hesabına bağlı değil.`;
@@ -422,6 +427,11 @@ export function createLinkAdmin({
   }
 
   async function renderInfo(actor, instance, res, { selector, value }) {
+    if (selector === 'discord' && Array.isArray(res.links) && res.links.length > 1) {
+      const rendered = await Promise.all(res.links.map((link) => renderInfo(actor, instance,
+        { ...res, link, links: [link] }, { selector: 'uuid', value: link.uuid })));
+      return payload(rendered.flatMap((result) => result.embeds), rendered.flatMap((result) => result.components));
+    }
     const link = res.linked ? res.link : null;
     const discordId = link?.discordId ?? (selector === 'discord' ? value : null);
     const user = discordId ? await actor.resolveUser?.(discordId) : null;
@@ -606,6 +616,7 @@ export function createLinkAdmin({
       return errorPayload(info, 'bağlantı bilgisi');
     }
     if (!fromInstance(info, t.instance)) return mismatchPayload('unlink');
+    if (selector === 'discord' && info.links?.length > 1) return ambiguousDiscordPayload(value, info.links);
     if (!info.linked || !info.link) return notLinkedPayload(selector, value, info);
     const panelId = newId();
     panels.create({

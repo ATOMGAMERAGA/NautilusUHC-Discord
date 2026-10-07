@@ -23,10 +23,11 @@ export default [
         return interaction.editReply({ embeds: [bridgeErrorEmbed(res.res, { context: 'bağlantı durumu' })] });
       }
       if (res.linked) {
-        const name = res.link?.currentName ?? res.link?.mcName ?? '?';
+        const names = res.links.map((link) => `**${clean(link.currentName ?? link.mcName ?? '?', 30)}**`).join(', ');
         return interaction.editReply({
           embeds: [okEmbed(
-            `Discord hesabın **${clean(name, 30)}** ile eşleşmiş durumda.\n`
+            `Discord hesabına bağlı Minecraft hesapları: ${names}.\n`
+            + (res.links.length < 2 ? 'İkinci Minecraft hesabını aynı Hesap Bağla butonuyla ekleyebilirsin.\n' : '')
             + 'Bağlantıyı değiştirmen gerekiyorsa `/destek aç` ile talep oluştur.',
             '🔗 Hesap Bağlı',
           )],

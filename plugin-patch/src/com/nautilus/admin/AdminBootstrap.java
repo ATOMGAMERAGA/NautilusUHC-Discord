@@ -59,6 +59,7 @@ public final class AdminBootstrap {
         TeamAdminGui teams = new TeamAdminGui(nautilusUHC);
         nautilusUHC.getCommand("teamadmin").setExecutor(teams);
         Bukkit.getPluginManager().registerEvents(teams, nautilusUHC);
+        com.nautilus.auth.SingleIpListener.install(nautilusUHC);
         nautilusUHC.getLogger().info("/uhcadmin y\u00f6netim paneli ve kal\u0131c\u0131 ma\u00e7 takvimi haz\u0131r.");
     }
 

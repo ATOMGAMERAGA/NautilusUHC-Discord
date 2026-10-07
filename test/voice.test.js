@@ -7,7 +7,7 @@ test('linked alive player routes to numbered team; death and revival follow game
  assert.equal(core.destination(state,{participant:true,alive:true,team:2}), 'team:2');
  assert.equal(core.destination(state,{participant:true,alive:false,team:2}), 'spectator');
  assert.equal(core.destination(state,{participant:true,alive:true,team:null}), 'solo');
- assert.equal(core.destination(state,{participant:false,alive:false}), null);
+ assert.equal(core.destination(state,{participant:false,alive:false}), 'global');
  assert.equal(core.destination({active:false},{participant:true,alive:true,team:2}),null);
 });
 test('channel names sort by numeric team number',()=>{
@@ -17,28 +17,30 @@ test('channel names sort by numeric team number',()=>{
 
 process.env.DISCORD_TOKEN='test';process.env.BRIDGE_SECRET='test';
 process.env.DB_PATH=`/tmp/nautilus-voice-test-${process.pid}.db`;
-const {createVoiceManager,VOICE_CATEGORY}=await import('../src/voice.js');
-const {ChannelType,PermissionFlagsBits:P}=await import('discord.js');
+const {createVoiceManager,VOICE_CATEGORY,GLOBAL_VOICE}=await import('../src/voice.js');
+const {ChannelType,PermissionFlagsBits:P,PermissionsBitField}=await import('discord.js');
 function environment() {
- const channels=new Map([[VOICE_CATEGORY,{id:VOICE_CATEGORY,type:ChannelType.GuildCategory}]]);
- const roles=new Map();const members=new Map();const voices=new Map();const moves=[],deletions=[];let serial=0,stored='';
+ const channels=new Map([[VOICE_CATEGORY,{id:VOICE_CATEGORY,type:ChannelType.GuildCategory}],[GLOBAL_VOICE,{id:GLOBAL_VOICE,type:ChannelType.GuildVoice,members:new Map()}]]);
+ const roles=new Map();const members=new Map();const voices=new Map();const moves=[],deletions=[];let serial=0,stored='',guardStored='',voiceMoved=null;
  const guild={id:'guild',channels:{cache:channels,fetch:async()=>channels,setPositions:async()=>{},create:async opts=>{
-  const c={...opts,id:`channel-${++serial}`,parentId:opts.parent,members:new Map(),permissionOverwrites:{set:async o=>{c.overwrites=o;}},
+  const c={...opts,id:`channel-${++serial}`,parentId:opts.parent,members:new Map(),permissionOverwrites:{cache:new Map(),set:async o=>{c.overwrites=o;c.permissionOverwrites.cache.clear();for(const row of o)c.permissionOverwrites.cache.set(row.id,{id:row.id,type:['guild','linked-role'].includes(row.id)?0:1,allow:new PermissionsBitField(row.allow??[]),deny:new PermissionsBitField(row.deny??[])});},
+    edit:async(id,opts)=>{const old=c.permissionOverwrites.cache.get(id);const row={id,type:1,allow:new PermissionsBitField(old?.allow.bitfield??0n),deny:new PermissionsBitField(old?.deny.bitfield??0n)};row.allow.remove(P.Connect);row.deny.remove(P.Connect);if(opts.Connect===true)row.allow.add(P.Connect);if(opts.Connect===false)row.deny.add(P.Connect);c.permissionOverwrites.cache.set(id,row);},
+    delete:async id=>c.permissionOverwrites.cache.delete(id)},
    setParent:async id=>{c.parentId=id;},setName:async name=>{c.name=name;},delete:async()=>{deletions.push(c.name);channels.delete(c.id);}};channels.set(c.id,c);return c;
  }},roles:{cache:roles,create:async opts=>{const r={id:'linked-role',...opts};roles.set(r.id,r);return r;}},members:{cache:members,fetch:async id=>members.get(id)},voiceStates:{cache:voices}};
  function addMember(id,channelId='external') {
   const rs=new Map();const m={id,roles:{cache:rs,add:async role=>rs.set(role,{}),remove:async role=>rs.delete(role)},voice:{channelId,setChannel:async to=>{
-   channels.get(m.voice.channelId)?.members.delete(id);m.voice.channelId=to;voices.get(id).channelId=to;channels.get(to)?.members.set(id,m);moves.push([id,to]);
+   const from=m.voice.channelId;channels.get(from)?.members.delete(id);m.voice.channelId=to;voices.get(id).channelId=to;channels.get(to)?.members.set(id,m);moves.push([id,to]);if(voiceMoved)queueMicrotask(()=>voiceMoved(m,from,to));
   }}};members.set(id,m);voices.set(id,{id,channelId,member:m});channels.get(channelId)?.members.set(id,m);return m;
  }
- let state={ok:true,enabled:true,active:false,matchKey:'',teams:[{number:1},{number:2}],links:[{discordId:'a',participant:false,alive:false,team:1}]};
+ let state={ok:true,enabled:true,active:false,matchKey:'',teams:[{number:1},{number:2}],links:[{discordId:'a',online:true,participant:false,alive:false,team:1}]};
  const client={user:{id:'bot'},guilds:{cache:new Map([['guild',guild]])}};
- const options={client,guildId:'guild',api:{voiceSnapshot:async()=>state},read:()=>stored,write:v=>{stored=v;},logger:{error:()=>{}}};
- return {channels,guild,moves,deletions,addMember,manager:(extra={})=>createVoiceManager({...options,...extra}),state:v=>{state=v;},current:()=>state,registry:()=>JSON.parse(stored)};
+ const options={client,guildId:'guild',api:{voiceSnapshot:async()=>state},read:()=>stored,write:v=>{stored=v;},readGuard:()=>guardStored,writeGuard:v=>{guardStored=v;},logger:{error:()=>{}}};
+ return {channels,guild,moves,deletions,addMember,onMove:fn=>{voiceMoved=fn;},manager:(extra={})=>createVoiceManager({...options,...extra}),state:v=>{state=v;},current:()=>state,registry:()=>JSON.parse(stored)};
 }
 test('planned match creates locked channels; start moves only connected participants',async()=>{
  const e=environment();const a=e.addMember('a');const m=e.manager();await m.tick();
- assert.equal(e.channels.size,6);assert.equal(e.moves.length,0);
+ assert.equal(e.channels.size,7);assert.equal(e.moves.length,0);
  const reg=e.registry();const entry=e.channels.get(reg.channels.entry);
  assert.ok(entry.overwrites.find(o=>o.id==='linked-role').allow.includes(P.Connect));
  const team=e.channels.get(reg.channels['team:1']);assert.ok(team.overwrites.find(o=>o.id==='linked-role').deny.includes(P.Connect));
@@ -78,9 +80,9 @@ test('voice demo creates channels without a match, visits each destination at tw
 test('voice demo refuses planned matches and unlinked accounts without creating channels',async()=>{
  const e=environment();const a=e.addMember('a');const m=e.manager();
  assert.equal(typeof m.runTest,'function');
- assert.equal((await m.runTest(a)).ok,false);assert.equal(e.channels.size,1);
+ assert.equal((await m.runTest(a)).ok,false);assert.equal(e.channels.size,2);
  e.state({...e.current(),enabled:false,links:[]});
- assert.equal((await m.runTest(a)).ok,false);assert.equal(e.channels.size,1);
+ assert.equal((await m.runTest(a)).ok,false);assert.equal(e.channels.size,2);
 });
 test('disconnected tester can enter transition channel; leaving during demo cancels and cleans up',async()=>{
  const e=environment();e.state({...e.current(),enabled:false});const a=e.addMember('a',null);
@@ -133,4 +135,42 @@ test('demo completion waits for pending reconciliation then deletes temporary ch
  const result=m.runTest(a);while(!release)await new Promise(setImmediate);
  await new Promise(setImmediate);release();assert.equal((await result).ok,true);
  assert.equal(Object.keys(e.registry().channels).length,0);
+});
+
+test('offline linked member goes to global voice, two-account routing follows online account',async()=>{
+ const e=environment();const a=e.addMember('a');const m=e.manager();
+ e.state({...e.current(),active:true,matchKey:'match',links:[
+  {discordId:'a',uuid:'1',online:false,participant:true,alive:true,team:1},
+  {discordId:'a',uuid:'2',online:true,participant:true,alive:true,team:2}]});
+ await m.tick();const reg=e.registry();assert.equal(a.voice.channelId,reg.channels['team:2']);
+ e.state({...e.current(),links:e.current().links.map(l=>({...l,online:false}))});await m.tick();
+ assert.equal(a.voice.channelId,GLOBAL_VOICE);assert.ok(e.channels.has(GLOBAL_VOICE));
+});
+test('tenth manual transition entry moves to global, blocks Connect, restart preserves and expiry restores original permission',async()=>{
+ const e=environment();const a=e.addMember('a');let now=0;let m=e.manager({now:()=>now});await m.tick();
+ const entry=e.registry().channels.entry;const c=e.channels.get(entry);
+ await c.permissionOverwrites.edit('a',{Connect:true});c.permissionOverwrites.cache.get('a').deny.add(P.Speak);
+ for(let i=0;i<10;i++){
+  a.voice.channelId=entry;e.guild.voiceStates.cache.get('a').channelId=entry;
+  await m.voiceChanged({channelId:GLOBAL_VOICE},{guild:e.guild,channelId:entry,member:a});now+=1000;
+ }
+ assert.equal(a.voice.channelId,GLOBAL_VOICE);assert.ok(c.permissionOverwrites.cache.get('a').deny.has(P.Connect));
+ m=e.manager({now:()=>now});await m.tick();assert.ok(c.permissionOverwrites.cache.get('a').deny.has(P.Connect));
+ now=69000;await m.tick();assert.equal(c.permissionOverwrites.cache.get('a').deny.has(P.Connect),false);
+ assert.equal(c.permissionOverwrites.cache.get('a').allow.has(P.Connect),true);
+ assert.equal(c.permissionOverwrites.cache.get('a').deny.has(P.Speak),true);
+});
+test('bot transition moves do not count toward spam, blocked users remain blocked during bridge outage',async()=>{
+ const e=environment();const a=e.addMember('a');let now=0;const m=e.manager({now:()=>now,sleep:async()=>{}});
+ // Eleven demos move external -> entry via bot; their delayed gateway entry events must be ignored.
+ e.channels.set('external',{id:'external',members:new Map()});e.state({...e.current(),enabled:false});
+ e.onMove((member,from,to)=>m.voiceChanged({channelId:from},{guild:e.guild,channelId:to,member}));
+ for(let i=0;i<11;i++)assert.equal((await m.runTest(a)).ok,true);
+ e.onMove(null);
+ e.state({...e.current(),enabled:true,links:[{discordId:'a',online:false}]});await m.tick();
+ const entry=e.registry().channels.entry;
+ for(let i=0;i<10;i++){a.voice.channelId=entry;e.guild.voiceStates.cache.get('a').channelId=entry;await m.voiceChanged({channelId:GLOBAL_VOICE},{guild:e.guild,channelId:entry,member:a});}
+ e.state({ok:false});a.voice.channelId=entry;e.guild.voiceStates.cache.get('a').channelId=entry;
+ await m.voiceChanged({channelId:GLOBAL_VOICE},{guild:e.guild,channelId:entry,member:a});assert.equal(a.voice.channelId,GLOBAL_VOICE);
+ now=60000;await m.tick();assert.equal(e.channels.get(entry).permissionOverwrites.cache.get('a'),undefined);
 });
