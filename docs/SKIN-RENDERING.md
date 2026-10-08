@@ -15,20 +15,27 @@ emote visuals are disabled; custom armor and text shaders remain enabled.
 
 The current archive is published at:
 
-`https://bot.nautilusuhc.com/resource-pack/97df9c175ed17072beaa5396ce3620dbaee4473c.zip`
+`https://pack.nautilusuhc.com/generated.zip?v=97df9c175ed17072beaa5396ce3620dbaee4473c`
 
 Its SHA-1 is `97df9c175ed17072beaa5396ce3620dbaee4473c` and size is 360,946
-bytes. ItemsAdder's external-host URL must reference the same archive. The bot
-serves this exact public file through GET/HEAD with immutable caching. Other
-paths do not expose files. The earlier external URL served the old archive
-even after local regeneration, so local `/iazip` alone was insufficient.
+bytes. The user uploaded the corrected archive to Cloudflare and the MC URL
+was restored to the same domain and file path. The `v` parameter uses the new
+hash because the previous `v=2b2a918a80a01fa1ea5a31316b4aa5984d669f7e` URL
+still returned the cached old archive after the upload. MC downloads and
+ItemsAdder's URL validation confirm the new file.
+
+The bot's fixed GET/HEAD endpoint remains available as a fallback at
+`https://bot.nautilusuhc.com/resource-pack/97df9c175ed17072beaa5396ce3620dbaee4473c.zip`.
+The MC server currently downloads from Cloudflare.
 
 For a future pack regeneration: keep these shader options disabled, run
-`iareload` then `iazip`, copy the generated archive into `resourcepacks/`,
-name it with its SHA-1, update `src/resourcepack.js` and the byte test, verify
-tests, push and wait for Dokploy. Download the public file and verify its hash
-before changing the MC external URL and reloading ItemsAdder. The bot checks
-the content hash on startup.
+`iareload` then `iazip`, upload the generated archive to Cloudflare as
+`generated.zip`, and update the MC URL's `v` parameter to its new SHA-1.
+Download that public URL and verify its bytes/hash before reloading ItemsAdder.
+Local `/iazip` alone does not publish the file to Cloudflare. If updating the
+optional bot fallback, copy the archive into `resourcepacks/`, name it with
+its SHA-1, update `src/resourcepack.js` and the byte test, verify tests, push
+and wait for Dokploy. The bot checks its bundled file's hash on startup.
 
 The MC backup directory is `/root/nautilus/backups/2026-10-08-skin-rendering/`:
 `TAB-config.yml`, `ItemsAdder-config.yml`, and `output-generated.zip`.

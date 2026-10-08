@@ -21,3 +21,8 @@ Back up both MC configs and the previous archive before editing. Validate TAB
 and MC profile packets after reload, plus normal bot health and reverse bridge.
 A protocol probe cannot verify a client's rendered inventory screen; that
 visual check requires the user's actual Minecraft client.
+
+After the user uploaded the corrected pack to Cloudflare, restore the MC URL
+to `pack.nautilusuhc.com/generated.zip` with the new SHA-1 in its `v` parameter.
+The old version parameter still serves cached old bytes. Verify the new URL
+from MC and confirm ItemsAdder accepts it. Keep the bot endpoint as a fallback.
