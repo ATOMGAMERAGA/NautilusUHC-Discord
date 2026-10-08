@@ -16,6 +16,7 @@ process.env.DB_PATH = dbFile;
 const { createRequestHandler, verifySignature, buildAnnouncement, matchChannelId, findMatchChannelByName } = await import('../src/httpserver.js');
 const { config } = await import('../src/config.js');
 const { setSetting, processedEvents } = await import('../src/db.js');
+const { resourcePackPath } = await import('../src/resourcepack.js');
 
 const SECRET = process.env.BRIDGE_SECRET;
 
@@ -55,6 +56,13 @@ before(async () => {
 after(() => {
   server?.close();
   try { rmSync(dbFile); rmSync(`${dbFile}-wal`, { force: true }); rmSync(`${dbFile}-shm`, { force: true }); } catch {}
+});
+
+test('resource pack is available through the actual public handler without bridge credentials', async () => {
+  const response = await fetch(base + resourcePackPath);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/zip');
+  assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0, 2).toString(), 'PK');
 });
 
 function sign(rawBody, { ts = Date.now(), nonce = randomUUID(), secret = SECRET } = {}) {

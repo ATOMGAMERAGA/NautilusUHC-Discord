@@ -6,6 +6,7 @@ import { baseEmbed, brandFooter, Colors, Assets, Brand } from './embeds.js';
 import { trDateTime, discordTime, formatSeconds, clean, codeText } from './util.js';
 import { bridgeQueue, MAX_POLL_WAIT_MS, ANONYMOUS_INSTANCE_PREFIX } from './bridgequeue.js';
 import { publicStats } from './statsproxy.js';
+import { serveResourcePack } from './resourcepack.js';
 
 /**
  * Receives lifecycle events from the NautilusUHC plugin (Pelican host) and turns
@@ -458,6 +459,8 @@ export function createRequestHandler(client, hooks = {}) {
     const url = new URL(req.url ?? '/', 'http://nautilus.local');
     const path = url.pathname;
     const ip = req.socket?.remoteAddress ?? '?';
+
+    if (serveResourcePack(req, res, path)) return;
 
     /* ---------------- Public stats (kimlik doğrulaması YOK) --------------- */
     // Site bu uçları okur. Salt-okunur, beyaz listeli ve önbellekli; veriyi
