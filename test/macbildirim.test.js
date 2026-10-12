@@ -74,7 +74,7 @@ test('onay butonu: sahibi TTL içinde onaylayabilir', () => {
 
 /* ---------------- DM dağıtım kuralları ---------------- */
 
-const startData = { host: 'Atom', players: 10, scenarios: ['Timber'], startedAt: 1784224803000 };
+const startData = { host: 'Atom', hostDiscordId: '123456789012345678', mentionEveryone: true, mentionHere: true, players: 10, scenarios: ['Timber'], startedAt: 1784224803000 };
 
 test('normal match_start yalnız abonelere birer DM gönderir', async () => {
   reset();
@@ -147,6 +147,7 @@ test('DM embed\'i kanal duyurusuyla aynı üreticiden çıkar (drift yok)', asyn
   const dms = [];
   await dispatchMatchDms(mockClient(dms), { type: 'match_start', test: false, data: startData });
   const channelPayload = buildAnnouncement('match_start', startData, false);
-  assert.deepEqual(dms[0].payload.embeds[0].data.fields, channelPayload.embeds[0].data.fields);
-  assert.equal(dms[0].payload.embeds[0].data.title, channelPayload.embeds[0].data.title);
+  assert.deepEqual(dms[0].payload.embeds[0].data, channelPayload.embeds[0].data);
+  assert.doesNotMatch(dms[0].payload.content, /@everyone|@here/);
+  assert.deepEqual(dms[0].payload.allowedMentions.users, ['c1']);
 });

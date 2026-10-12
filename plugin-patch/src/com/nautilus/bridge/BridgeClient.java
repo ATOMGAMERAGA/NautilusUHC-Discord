@@ -173,6 +173,10 @@ public final class BridgeClient {
         settings.addProperty("borderSize", (Number)this.plugin.getConfig().getInt("uhc.startingBorder", 3000));
         settings.addProperty("latecomerWindow", (Number)((int)(this.plugin.getConfig().getLong("lateScatter.windowSeconds", 300L) / 60L)));
         data.add("settings", (JsonElement)settings);
+        var scheduled=com.nautilus.admin.AnnouncementRuntime.scheduled();
+        if(scheduled==null && this.plugin instanceof NautilusUHC p)scheduled=com.nautilus.admin.AnnouncementRuntime.fallback(p,host,scenarios);
+        if(scheduled==null)scheduled=new com.nautilus.admin.MatchAnnouncementContext(null,host,AdminBootstrap.announcementTeamLimit(this.currentTeamLimit()),List.copyOf(scenarios),com.nautilus.admin.AnnouncementSettings.DEFAULT);
+        this.announcementData(data,scheduled);
         this.send("match_scheduled", test && !AdminBootstrap.isScheduledAnnouncement(), data);
     }
 
@@ -185,6 +189,8 @@ public final class BridgeClient {
         if (this.plugin instanceof NautilusUHC p) {
             data.addProperty("plannedAnnouncement",com.nautilus.admin.LaunchAnnouncement.matches(FeatureBridge.matchEpoch(p)));
         }
+        var context=this.plugin instanceof NautilusUHC p?com.nautilus.admin.AnnouncementRuntime.start(p,host,scenarios):new com.nautilus.admin.MatchAnnouncementContext(null,host,this.currentTeamLimit(),List.copyOf(scenarios),com.nautilus.admin.AnnouncementSettings.DEFAULT);
+        this.announcementData(data,context);
         this.send("match_start", test, data);
     }
 
@@ -209,7 +215,19 @@ public final class BridgeClient {
             data.addProperty("mvpName", mvpName);
             data.addProperty("mvpKills", (Number)mvpKills);
         }
+        var completion=com.nautilus.admin.AnnouncementRuntime.completed();
+        if(completion!=null)completion.addTo(data);
+        else {
+            var context=this.plugin instanceof NautilusUHC p?com.nautilus.admin.AnnouncementRuntime.end(p):null;
+            if(context==null)context=new com.nautilus.admin.MatchAnnouncementContext(null,"Sunucu",this.currentTeamLimit(),List.of(),com.nautilus.admin.AnnouncementSettings.DEFAULT);
+            this.announcementData(data,context);
+        }
         this.send("match_end", test, data);
+    }
+
+    private void announcementData(JsonObject data,com.nautilus.admin.MatchAnnouncementContext context){
+        String id="";try{id=com.nautilus.admin.AnnouncementRuntime.discordId(context);}catch(RuntimeException ex){this.plugin.getLogger().warning("Duyuru host Discord bağlantısı okunamadı: "+ex.getMessage());}
+        context.addTo(data,id);
     }
 
     public void hostMessage(String host, String message, boolean test) {

@@ -140,7 +140,7 @@ test('HMAC imzalı v2 eventi kanala gönderilir', async () => {
   assert.equal(body.ok, true);
   assert.equal(sends.length, 1);
   assert.equal(hookEvents.length, 1, 'onEvent hook çağrılmalı');
-  assert.match(sends[0].embeds[0].data.title, /Maç Başladı/);
+  assert.match(sends[0].embeds[0].data.description, /\*\*Açıldı\*\*/);
 });
 
 test('aynı eventId retry edilirse ikinci Discord mesajı üretilmez', async () => {
@@ -215,15 +215,15 @@ test('desteklenmeyen schemaVersion 422 döner', async () => {
   assert.equal(body.error, 'unsupported_schema_version');
 });
 
-test('test eventi etiket taşımaz, normal maç duyurusu everyone taşır', async () => {
+test('test eventi etiket taşımaz, normal maç duyurusu açıkça seçilen everyone taşır', async () => {
   setSetting('match_ping_role', '42424242');
-  const normal = buildAnnouncement('match_start', { host: 'x' }, false);
-  const testli = buildAnnouncement('match_start', { host: 'x' }, true);
-  assert.equal(normal.content, '@everyone');
+  const normal = buildAnnouncement('match_start', { host: 'x', mentionEveryone: true }, false);
+  const testli = buildAnnouncement('match_start', { host: 'x', mentionEveryone: true }, true);
+  assert.equal(normal.content, '||@everyone||');
   assert.deepEqual(normal.allowedMentions.parse, ['everyone']);
   assert.equal(normal.allowedMentions.roles, undefined);
   assert.equal(testli.content, undefined);
-  assert.doesNotMatch(testli.embeds[0].data.title, /TEST/);
+  assert.doesNotMatch(testli.embeds[0].data.description, /TEST/);
   setSetting('match_ping_role', '');
 });
 
@@ -328,7 +328,7 @@ test('sözleşme fixture\'ları receiver tarafından işlenir (contract testi)',
     assert.equal(status, 200, `${f} işlenmeli`);
     assert.equal(sends.length, 1, `${f} tek kanal mesajı üretmeli`);
     if (envelope.test) {
-      assert.doesNotMatch(sends[0].embeds[0].data.title, /TEST/, `${f} temiz başlık taşımalı`);
+      assert.doesNotMatch(sends[0].embeds[0].data.title ?? sends[0].embeds[0].data.description, /TEST/, `${f} temiz başlık taşımalı`);
       assert.equal(sends[0].content, undefined, `${f} rol pingi taşımamalı`);
     }
     checked++;

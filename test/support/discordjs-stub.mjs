@@ -38,6 +38,9 @@ export const TextInputBuilder = builder();
 export const ActionRowBuilder = builder();
 export const ButtonBuilder = builder();
 export const StringSelectMenuBuilder = builder();
+export const UserSelectMenuBuilder = builder();
+export const RoleSelectMenuBuilder = builder();
+export const ChannelSelectMenuBuilder = builder();
 export const AttachmentBuilder = builder();
 
 export class EmbedBuilder {

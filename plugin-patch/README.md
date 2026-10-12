@@ -1,9 +1,57 @@
-# NautilusUHC hesap bağlama yaması (1.2.2-linkfix)
+# NautilusUHC plugin yaması (1.2.9-message-studio)
 
-Bu klasör, dağıtılan NautilusUHC JAR'ında yalnız hesap bağlama (Minecraft ↔
-Discord) ile ilgili sınıfların kaynaklarını, derleme betiğini ve regresyon
-testlerini tutar. Pluginin geri kalan kaynağı burada değildir; derleme mevcut
+Bu klasör; dağıtılan NautilusUHC JAR’ındaki hesap bağlama, takım yönetimi,
+maç planlama ve Discord duyuru sınıflarının kaynaklarını, derleme betiklerini
+ve regresyon testlerini tutar. Pluginin geri kalan kaynağı burada değildir; derleme mevcut
 JAR'a karşı yapılır ve JAR'daki diğer girişler bayt bayt korunur.
+
+
+## 1.2.9 maç ödülü ve duyuru ayarları
+
+- `/uhcadmin` → yeni maç taslağında ödül serbest metindir (en fazla 240 karakter).
+  Ödül öğesine sol tıklayıp örste düzenle; boş metin veya sağ tık ödülü kaldırır.
+  Aynı taslak hem planlama hem hemen başlatma için kullanılır.
+- Discord sayfasında ve maç düzenleyicide `@everyone` ve `@here` ayrı anahtarlardır.
+  Yeni/eski ayarsız hostlarda ikisi de **kapalıdır**. UUID’ye göre
+  `host-preferences.properties` dosyasında saklanır.
+- Her plan ödül ve iki anahtarı kendi `admin-schedule.properties` kaydına kopyalar.
+  Hostun sonraki taslak değişiklikleri mevcut planı veya çalışan maçı değiştirmez.
+- Takım seçimleri **FFA (takımsız solo), To2, To3** ile sınırlıdır. FFA mevcut
+  atamaları temizler. Eski 4+ boyut ayarları açılışta/plan yüklemesinde To3’e
+  indirilir; sığmayan takımlar düzenlenmeden takım maçı başlatılmaz.
+- `match_scheduled`, `match_start`, `match_end` olaylarının `data` alanında
+  `host`, `hostDiscordId`, `teamSize`, `scenarios`, `prize`, `mentionEveryone`,
+  `mentionHere` bulunur. `hostDiscordId` maç hostunun UUID’sinin **LinkService**
+  kaydından alınır; bağlantı yoksa boş metindir. `match_end.winners` gerçek
+  kazanan isimlerini içerir; mevcut `winner` alanı da korunur.
+- Sonuç bildirimi veritabanından gecikmeli gelirse tamamlanan maçın host/ödül/
+  anahtar/kazanan kopyası kullanılır. Yeni maçın ayarları eski sonuca sızmaz.
+  Köprü metot imzaları, olay adları, HMAC ve HTTP teslim akışı korunmuştur.
+
+### Linux derleme ve test
+
+JDK 21 ile **gerçek Paper 1.21.11 API** ve bağımlılık JAR’larını ayrı bir klasöre
+koyun. `compile-stubs/` bu derleme için kullanılmaz ve API sınıfları çıktıya
+paketlenmez. Kullanılan Paper sürümü: `paper-api-1.21.11-R0.1-20260511.115010-91`.
+Derleme bağımlılıkları Paper POM’undaki sürümlerle eşleşir: Adventure 4.26.1,
+Examination 1.3.0, Gson 2.11.0, Guava 33.3.1-jre, SnakeYAML 2.2,
+SLF4J 2.0.16, Log4j API 2.24.1 ve BungeeCord Chat
+`1.21-R0.2-deprecated+build.21`. JAR’ları Maven Central/Paper Artifactory’den alın.
+
+```bash
+python3 plugin-patch/build.py BASE.jar dist/NautilusUHC-1.2.9-message-studio.jar \
+  --java-bin /path/to/jdk21/bin --api-dir /path/to/paper-libraries
+python3 plugin-patch/test.py dist/NautilusUHC-1.2.9-message-studio.jar \
+  --java-bin /path/to/jdk21/bin --api-dir /path/to/paper-libraries
+```
+
+`build.py` arşivi tekrar okur; değiştirilmesi gerekmeyen girişlerin içeriğini
+bayt bayt taban JAR ile karşılaştırır. `test.py` bütün `*Test.java` sınıflarını
+**üretilen JAR’a karşı** derler ve çalıştırır. Testler; ödülün yeniden yükleme ve
+host ayarı değişikliklerine dayanmasını, iki etiketin bağımsızlığını, eski plan
+geçişlerini, takım sınırını, maç epoch izolasyonunu ve gerçek HTTP üzerinden
+imzalı köprü olaylarını kapsar. Canlı Paper/Discord uçtan uca kontrolü ayrıca
+sunucuda yapılmalıdır.
 
 | Dosya | Görev |
 |---|---|

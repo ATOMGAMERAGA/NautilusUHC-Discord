@@ -57,21 +57,21 @@ public final class TeamOperations {
    }
    case "remove" -> t.removeMember(id);
    case "create" -> {
-    if(t.getLimit()<=1)return "Önce takım boyutunu en az 2 yap.";
+    if(t.getLimit()<2||t.getLimit()>3)return "Önce takım boyutunu en az 2 yap.";
     if(t.getTeam(id)!=null)return "Oyuncu zaten takımda. Önce Solo yap.";
     t.createTeam(List.of(id));
    }
    case "disband" -> {for(UUID member:List.copyOf(t.getMembers(number)))t.removeMember(member);}
    case "size" -> {
     int size=b.has("size")?b.get("size").getAsInt():0;
-    if(size<1||size>100)return "Takım boyutu 1–100 arasında olmalı.";
-    if(size==1&&!t.teamNumbers().isEmpty())return "Solo moduna geçmeden önce takımları temizle.";
+    if(size<1||size>3)return "Takım boyutu FFA, To2 veya To3 olmalı.";
+    if(size==1)t.clearAssignments();
     if(size>1&&t.teamNumbers().stream().anyMatch(n->t.memberCount(n)>size))return "Bir takım yeni boyuttan büyük; önce oyuncuları düzenle.";
     t.setLimit(size);
    }
    case "clear" -> t.clearAssignments();
    case "randomize" -> {
-    if(t.getLimit()<=1)return "Solo modunda takım dağıtılamaz.";
+    if(t.getLimit()<2||t.getLimit()>3)return "Solo modunda takım dağıtılamaz.";
     List<UUID> ids=new ArrayList<>();
     for(Player x:Bukkit.getOnlinePlayers())if(p.getUhcHub().isInHub(x))ids.add(x.getUniqueId());
     if(ids.isEmpty())return "UHC bekleme alanında oyuncu yok.";
