@@ -10,6 +10,7 @@ import { buildLivePayload } from './commands/mac.js';
 import { linkCodeModal, handleLinkModal } from './linkui.js';
 import { linkAdminComponents } from './linkadmin.js';
 import { handleTeamAdmin } from './teamadmin.js';
+import { handleMessageStudio } from './messagestudio.js';
 
 /**
  * Component (button / modal) handlers, keyed by customId prefix.
@@ -20,6 +21,7 @@ import { handleTeamAdmin } from './teamadmin.js';
  * (ayrıntı: linkui.js / linkflow.js).
  */
 export const componentHandlers = {
+  'studio': handleMessageStudio,
   'teamadmin': handleTeamAdmin,
   'link:open': async (interaction) => {
     await interaction.showModal(linkCodeModal());

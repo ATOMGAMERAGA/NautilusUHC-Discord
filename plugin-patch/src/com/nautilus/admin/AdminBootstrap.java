@@ -52,6 +52,8 @@ public final class AdminBootstrap {
         if (pluginCommand == null) {
             throw new IllegalStateException("/uhcadmin plugin.yml kayd\u0131 eksik");
         }
+        nautilusUHC.getTeams().setLimit(TeamPolicy.limit(nautilusUHC.getTeams().getLimit()));
+        if(nautilusUHC.getTeams().getLimit()==1)nautilusUHC.getTeams().clearAssignments();
         controller = new AdminController(nautilusUHC);
         pluginCommand.setExecutor((CommandExecutor)controller);
         pluginCommand.setTabCompleter((TabCompleter)controller);

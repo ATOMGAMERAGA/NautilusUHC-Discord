@@ -264,13 +264,13 @@ TabCompleter {
     }
 
     private void rememberLive(Player player) {
-        Draft d=this.draft(player);d.team=Math.max(1,this.plugin.getTeams().getLimit());d.scenarios.clear();
+        Draft d=this.draft(player);d.team=TeamPolicy.limit(this.plugin.getTeams().getLimit());d.scenarios.clear();
         d.scenarios.addAll(this.plugin.getScenarios().enabledScenarios().stream().map(Scenario::key).toList());this.saveDraft(player);
     }
 
     private void saveDraft(Player player) {
         Draft d=this.drafts.get(player.getUniqueId());if(d==null)return;
-        this.preferences.put(player.getUniqueId(),Map.of("team",String.valueOf(d.team),"world",d.world,"announce",String.valueOf(d.announce),"scenarios",String.join(",",d.scenarios),"date",d.date.toString(),"hour",String.valueOf(d.hour),"minute",String.valueOf(d.minute)));
+        Map<String,String> saved=new HashMap<>(Map.of("team",String.valueOf(d.team),"world",d.world,"announce",String.valueOf(d.announce),"scenarios",String.join(",",d.scenarios),"date",d.date.toString(),"hour",String.valueOf(d.hour),"minute",String.valueOf(d.minute)));saved.putAll(d.announcement().preferences());this.preferences.put(player.getUniqueId(),saved);
     }
 
     private Draft draft(Player player) {
@@ -280,9 +280,10 @@ TabCompleter {
             draft.date = LocalDate.parse(this.preferences.get(uUID,"date",zonedDateTime.toLocalDate().toString()));
             draft.hour = Math.floorMod(Integer.parseInt(this.preferences.get(uUID,"hour",String.valueOf(zonedDateTime.getHour()))),24);
             draft.minute = Math.floorMod(Integer.parseInt(this.preferences.get(uUID,"minute",String.valueOf(zonedDateTime.getMinute()))),60);
-            draft.team = Math.max(1, Integer.parseInt(this.preferences.get(uUID,"team",String.valueOf(this.plugin.getTeams().getLimit()))));
+            draft.team = TeamPolicy.limit(Integer.parseInt(this.preferences.get(uUID,"team",String.valueOf(this.plugin.getTeams().getLimit()))));
             draft.announce = Boolean.parseBoolean(this.preferences.get(uUID,"announce",String.valueOf(this.plugin.getSchedule().bridgeAvailable())));
             draft.world = this.preferences.get(uUID,"world","");
+            AnnouncementSettings settings=AnnouncementSettings.read(this.preferences,uUID);draft.prize=settings.prize();draft.mentionEveryone=settings.mentionEveryone();draft.mentionHere=settings.mentionHere();
             String keys=this.preferences.get(uUID,"scenarios",String.join(",",this.plugin.getScenarios().enabledScenarios().stream().map(Scenario::key).toList()));
             for(String key:keys.split(",")) if(Scenario.byKey(key)!=null) draft.scenarios.add(key);
             return draft;
@@ -312,30 +313,37 @@ TabCompleter {
             draft.minute = Math.floorMod(draft.minute + (inventoryClickEvent.isRightClick() ? -n : n), 60);
             this.editor((Player)player);
         }, "Sol / sa\u011f t\u0131k: +1 / -1 dakika", "Shift ile: 5 dakika");
-        this.clickButton(page, 16, Material.PLAYER_HEAD, "Tak\u0131m boyutu \u00b7 " + draft.team, (player, inventoryClickEvent) -> {
-            draft.team = Math.max(1, Math.min(100, draft.team + (inventoryClickEvent.isRightClick() ? -1 : 1)));
+        this.clickButton(page, 16, Material.PLAYER_HEAD, "Takım boyutu · " + TeamPolicy.label(draft.team), (player, inventoryClickEvent) -> {
+            draft.team = Math.max(1, Math.min(3, draft.team + (inventoryClickEvent.isRightClick() ? -1 : 1)));
             this.editor((Player)player);
-        }, "Sol / sa\u011f t\u0131k: art\u0131r / azalt", "1 = solo, 2 = duo, 3 = trio");
+        }, "Sol / sa\u011f t\u0131k: art\u0131r / azalt", "FFA = takımsız solo, To2 = duo, To3 = trio");
         this.button(page, 20, Material.GRASS_BLOCK, "Ma\u00e7 d\u00fcnyas\u0131", player -> this.worlds((Player)player, 0, true), draft.world.isEmpty() ? "Ba\u015flang\u0131\u00e7ta aktif haz\u0131r d\u00fcnya" : draft.world, "Bu se\u00e7im di\u011fer ma\u00e7 ayarlar\u0131n\u0131 de\u011fi\u015ftirmez");
         this.button(page, 22, Material.BOOK, "Ma\u00e7 senaryolar\u0131", player -> this.scenarios((Player)player, true), "Se\u00e7ili: " + draft.scenarios.size(), "Yaln\u0131zca bu plan i\u00e7in kaydedilir");
         this.button(page, 24, draft.announce ? Material.LIME_DYE : Material.GRAY_DYE, "Discord duyurusu \u00b7 " + (draft.announce ? "A\u00e7\u0131k" : "Kapal\u0131"), player -> {
             draft.announce = !draft.announce;
             this.editor((Player)player);
         }, "Plan kaydedildi\u011finde bota duyuru g\u00f6nder", "K\u00f6pr\u00fc ba\u011flant\u0131s\u0131: " + (this.plugin.getSchedule().bridgeAvailable() ? "Ayarl\u0131" : "Haz\u0131r de\u011fil"));
+        this.clickButton(page,29,Material.DIAMOND,"Ödül · "+(draft.prize.isBlank()?"Yok":draft.prize),(player,event)->{
+            if(event.isRightClick()){draft.prize="";this.editor(player);return;}
+            this.inputPrize(player,draft.prize.isBlank()?"Ödül":draft.prize,text->{draft.prize=new AnnouncementSettings(text,false,false).prize();this.editor(player);},()->this.editor(player));
+        },"Sol tık: serbest ödül metni yaz","Sağ tık veya boş metin: ödülü kaldır");
+        this.button(page,28,draft.mentionEveryone?Material.LIME_DYE:Material.GRAY_DYE,"@everyone · "+(draft.mentionEveryone?"Açık":"Kapalı"),player->{draft.mentionEveryone=!draft.mentionEveryone;this.editor(player);},"Yalnız bu maçın Discord duyuruları");
+        this.button(page,30,draft.mentionHere?Material.LIME_DYE:Material.GRAY_DYE,"@here · "+(draft.mentionHere?"Açık":"Kapalı"),player->{draft.mentionHere=!draft.mentionHere;this.editor(player);},"Yalnız bu maçın Discord duyuruları");
         this.button(page, 33, Material.DIAMOND_SWORD, "Hemen başlat", host -> {
-            int team=draft.team; String world=draft.world; List<String> selected=List.copyOf(draft.scenarios);
-            this.confirm(host, "Maçı hemen başlat", List.of("Takım boyutu: "+team, "Dünya: "+(world.isEmpty()?"Aktif hazır dünya":world), "Seçilen senaryolar: "+String.join(", ",selected)), player -> {
+            int team=draft.team; String world=draft.world; List<String> selected=List.copyOf(draft.scenarios);AnnouncementSettings announcement=draft.announcement();
+            this.confirm(host, "Maçı hemen başlat", List.of("Takım boyutu: "+team, "Dünya: "+(world.isEmpty()?"Aktif hazır dünya":world), "Seçilen senaryolar: "+String.join(", ",selected),"Ödül: "+(announcement.prize().isBlank()?"Yok":announcement.prize()),"@everyone: "+announcement.mentionEveryone()+" · @here: "+announcement.mentionHere()), player -> {
                 String error=this.manualStartCheck();
-                if(error==null && this.plugin.getTeams().teamNumbers().stream().anyMatch(n -> team<=1 || this.plugin.getTeams().memberCount(n)>team))
+                if(error==null && this.plugin.getTeams().teamNumbers().stream().anyMatch(n -> team>1 && this.plugin.getTeams().memberCount(n)>team))
                     error="Mevcut takımlar seçilen boyuta uygun değil. /teamadmin ile önce takımları düzenle veya temizle.";
                 if(error==null) error=WorldSelection.prepareForStart(this.plugin, world);
                 if(error!=null) {this.result(player,error);this.editor(player);return;}
                 this.saveDraft(player);
+                if(team==1)this.plugin.getTeams().clearAssignments();
                 this.plugin.getTeams().setLimit(team);
                 this.plugin.getScenarios().disableAll();
                 for(String key:selected) {Scenario scenario=Scenario.byKey(key);if(scenario!=null)this.plugin.getScenarios().enableScenario(scenario);}
                 this.plugin.getUhcMatch().setScenarioOverride(selected);
-                this.plugin.getUhcMatch().forceStart(player);
+                AnnouncementRuntime.launch(this.plugin,new MatchAnnouncementContext(player.getUniqueId(),player.getName(),team,selected,announcement),()->this.plugin.getUhcMatch().forceStart(player));
                 this.live(player);
             }, this::editor);
         }, "Tarih ve planlama beklemeden başlat", "Yukarıdaki kişisel ayarlar uygulanır");
@@ -350,8 +358,9 @@ TabCompleter {
             String string2 = draft.world;
             int n = draft.team;
             boolean bl = draft.announce;
-            this.confirm((Player)player2, "Ma\u00e7\u0131 planla", (List<String>)List.of(draft.date.format(DATE) + " " + String.format("%02d:%02d", draft.hour, draft.minute), "Planlayan: " + player2.getName(), "Tak\u0131m boyutu: " + n, "D\u00fcnya: " + (string2.isEmpty() ? "Aktif haz\u0131r d\u00fcnya" : string2), "Discord: " + (bl ? "Duyuru g\u00f6nder" : "Kapal\u0131")), player -> {
-                String scheduleError = this.plugin.getSchedule().scheduleDetailed(player.getName(), player.getUniqueId(), l, list, 1.0, string2, n, bl);
+            AnnouncementSettings announcement=draft.announcement();
+            this.confirm((Player)player2, "Ma\u00e7\u0131 planla", (List<String>)List.of(draft.date.format(DATE) + " " + String.format("%02d:%02d", draft.hour, draft.minute), "Planlayan: " + player2.getName(), "Tak\u0131m boyutu: " + n, "D\u00fcnya: " + (string2.isEmpty() ? "Aktif haz\u0131r d\u00fcnya" : string2), "Discord: " + (bl ? "Duyuru g\u00f6nder" : "Kapal\u0131"), "Ödül: "+(announcement.prize().isBlank()?"Yok":announcement.prize()), "@everyone: "+announcement.mentionEveryone()+" · @here: "+announcement.mentionHere()), player -> {
+                String scheduleError = this.plugin.getSchedule().scheduleDetailed(player.getName(), player.getUniqueId(), l, list, 1.0, string2, n, bl,announcement);
                 this.result((Player)player, scheduleError);
                 if (scheduleError == null) {
                     this.saveDraft(player);
@@ -462,6 +471,7 @@ TabCompleter {
         Page page = new Page(player3, "Ma\u00e7 Ayr\u0131nt\u0131lar\u0131");
         this.frame(page, player3, player -> this.schedule((Player)player, 0, false));
         this.button(page, 4, Material.CLOCK, this.stamp(entry.startAt), null, "Durum: " + this.state(entry.status), "Planlayan: " + entry.hostName, "Kimlik: " + String.valueOf(entry.hostId), "Ma\u00e7: " + String.valueOf(entry.id));
+        this.button(page,29,Material.DIAMOND,"Maç ödülü",null,entry.announcement.prize().isBlank()?"Ödülsüz":entry.announcement.prize(),"@everyone: "+(entry.announcement.mentionEveryone()?"Açık":"Kapalı"),"@here: "+(entry.announcement.mentionHere()?"Açık":"Kapalı"));
         this.button(page, 20, Material.GRASS_BLOCK, "D\u00fcnya ve tak\u0131m", null, "D\u00fcnya: " + (entry.worldName.isEmpty() ? "Aktif haz\u0131r d\u00fcnya" : entry.worldName), "Tak\u0131m boyutu: " + entry.teamLimit);
         this.button(page, 22, Material.BOOK, "Senaryolar", null, entry.scenarios.isEmpty() ? "Senaryo yok" : String.join((CharSequence)", ", entry.scenarios));
         this.button(page, 24, Material.PAPER, "\u0130\u015flem sonucu", null, entry.note.isEmpty() ? "Ma\u00e7 ba\u015flang\u0131c\u0131n\u0131 bekliyor." : entry.note, "Discord duyurusu: " + (entry.announce ? "A\u00e7\u0131k" : "Kapal\u0131"));
@@ -650,7 +660,7 @@ TabCompleter {
                 string = WorldSelection.prepareForStart(this.plugin, "");
             }
             if (string == null) {
-                uhcMatchManager.start((CommandSender)player);
+                this.launchLive(player,()->uhcMatchManager.start((CommandSender)player));
             } else {
                 this.result((Player)player, string);
             }
@@ -662,7 +672,7 @@ TabCompleter {
                 string = WorldSelection.prepareForStart(this.plugin, "");
             }
             if (string == null) {
-                uhcMatchManager.forceStart((CommandSender)player);
+                this.launchLive(player,()->uhcMatchManager.forceStart((CommandSender)player));
             } else {
                 this.result((Player)player, string);
             }
@@ -670,6 +680,7 @@ TabCompleter {
         }, this::live), new String[0]);
         this.button(page, 14, Material.YELLOW_DYE, "Geri say\u0131m\u0131 iptal et", player2 -> this.confirm((Player)player2, "Geri say\u0131m iptali", List.of("\u00c7al\u0131\u015fan ba\u015flang\u0131\u00e7 sayac\u0131 iptal edilir."), player -> {
             uhcMatchManager.cancelCountdown((CommandSender)player);
+            if(!uhcMatchManager.isStarted())AnnouncementRuntime.clear();
             this.live((Player)player);
         }, this::live), new String[0]);
         this.button(page, 16, Material.RED_DYE, "Ma\u00e7\u0131 durdur", player2 -> this.confirm((Player)player2, "UHC'yi durdur", List.of("Mevcut ma\u00e7 bitirilir.", "Normal ma\u00e7 sonu temizli\u011fi uygulan\u0131r."), player -> {
@@ -709,13 +720,7 @@ TabCompleter {
         this.frame(page, player3, this::home);
         int n = this.plugin.getTeams().getLimit();
         this.button(page, 4, Material.PLAYER_HEAD, "Tak\u0131m durumu", null, "Tak\u0131m boyutu: " + n, "Tak\u0131m say\u0131s\u0131: " + this.plugin.getTeams().teamNumbers().size(), "\u00c7evrimi\u00e7i: " + Bukkit.getOnlinePlayers().size());
-        this.clickButton(page, 20, Material.PLAYER_HEAD, "Tak\u0131m boyutu \u00b7 " + n, (player, inventoryClickEvent) -> {
-            if (this.idle((Player)player)) {
-                this.plugin.getTeams().setLimit(Math.max(1, Math.min(100, this.plugin.getTeams().getLimit() + (inventoryClickEvent.isRightClick() ? -1 : 1))));
-                this.rememberLive(player);
-            }
-            this.teams((Player)player);
-        }, "Sol / sa\u011f t\u0131k: art\u0131r / azalt", "Bu ayar mevcut ma\u00e7 i\u00e7indir.");
+        this.button(page,20,Material.PLAYER_HEAD,"Takım boyutu · "+TeamPolicy.label(n),player->new TeamAdminGui(this.plugin).home(player,0),"FFA (takımsız), To2 veya To3 seç");
         this.button(page, 22, Material.COMPASS, "Host kat\u0131l\u0131m\u0131 \u00b7 " + (this.plugin.getUhcMatch().isHostParticipating(player3) ? "Oynuyorsun" : "\u0130zliyorsun"), player -> {
             if (this.idle((Player)player)) {
                 this.plugin.getUhcMatch().setHostParticipation((CommandSender)player, !this.plugin.getUhcMatch().isHostParticipating((Player)player));
@@ -805,10 +810,21 @@ TabCompleter {
         this.show(player3, page);
     }
 
+    private void launchLive(Player player,Runnable start){
+        Draft draft=this.draft(player);this.saveDraft(player);
+        int team=TeamPolicy.limit(this.plugin.getTeams().getLimit());
+        if(team>1 && this.plugin.getTeams().teamNumbers().stream().anyMatch(number->this.plugin.getTeams().memberCount(number)>team)){this.result(player,"Mevcut takım seçilen boyuttan büyük; önce takımları düzenle.");return;}
+        if(team==1)this.plugin.getTeams().clearAssignments();this.plugin.getTeams().setLimit(team);
+        AnnouncementRuntime.launch(this.plugin,new MatchAnnouncementContext(player.getUniqueId(),player.getName(),team,this.plugin.getScenarios().enabledScenarios().stream().map(Scenario::key).toList(),draft.announcement()),start);
+    }
+
     private void discord(Player player2) {
         Page page = new Page(player2, "Discord Duyurular\u0131");
         this.frame(page, player2, this::home);
         boolean bl = this.plugin.getSchedule().bridgeAvailable();
+        Draft draft=this.draft(player2);
+        this.button(page,10,draft.mentionEveryone?Material.LIME_DYE:Material.GRAY_DYE,"@everyone · "+(draft.mentionEveryone?"Açık":"Kapalı"),player->{draft.mentionEveryone=!draft.mentionEveryone;this.saveDraft(player);this.discord(player);},"Yeni maç taslağına kaydedilir","Mevcut planlar kendi ayarlarını korur");
+        this.button(page,12,draft.mentionHere?Material.LIME_DYE:Material.GRAY_DYE,"@here · "+(draft.mentionHere?"Açık":"Kapalı"),player->{draft.mentionHere=!draft.mentionHere;this.saveDraft(player);this.discord(player);},"Yeni maç taslağına kaydedilir","Mevcut planlar kendi ayarlarını korur");
         this.button(page, 4, bl ? Material.LIME_DYE : Material.RED_DYE, "Discord k\u00f6pr\u00fcs\u00fc \u00b7 " + (bl ? "Ayarl\u0131" : "Haz\u0131r de\u011fil"), null, "Bot adresi ve ortak anahtar config \u00fczerinden okunur.", "G\u00f6nderim, bot k\u00f6pr\u00fcs\u00fcne teslim iste\u011fidir.", "Mesaj\u0131n Discord'a ula\u015ft\u0131\u011f\u0131n\u0131 bot logundan kontrol et.");
         this.button(page, 20, Material.WRITABLE_BOOK, "\u00d6zel host mesaj\u0131", player -> this.input((Player)player, "Discord Mesaj\u0131", "Duyuru metni", string -> this.confirm((Player)player, "Discord mesaj\u0131 g\u00f6nder", List.of(string), receiver -> {
             this.sendDiscord(receiver, () -> {
@@ -859,6 +875,11 @@ TabCompleter {
         Page page = new Page(player, string, consumer, runnable);
         page.inventory.setItem(0, AdminController.item(Material.PAPER, string2, new String[0]));
         this.show(player, page);
+    }
+
+    private void inputPrize(Player player,String initial,Consumer<String> accept,Runnable escape){
+        Page page=new Page(player,"Maç Ödülü",accept,escape);page.allowBlank=true;
+        page.inventory.setItem(0,AdminController.item(Material.PAPER,initial,"Boş bırak: ödülsüz maç"));this.show(player,page);
     }
 
     private void health(Player player2) {
@@ -938,8 +959,8 @@ TabCompleter {
         if(!(event.getWhoClicked() instanceof Player player) || page.busy || !GuiPolicy.mayAct(page.owner,player.getUniqueId(),this.allowed(player),event.getRawSlot(),inventory.getSize()))return;
         if(page.input!=null) {
             if(event.getRawSlot()!=2)return;
-            String raw=inventory instanceof AnvilInventory anvil?anvil.getRenameText():null;
-            if(raw==null||raw.isBlank()||raw.length()>240){player.sendMessage("§cMesaj 1–240 karakter olmalı.");return;}
+            String raw=event.getView() instanceof org.bukkit.inventory.view.AnvilView anvil?anvil.getRenameText():null;
+            if(raw==null||(!page.allowBlank&&raw.isBlank())||raw.length()>240){player.sendMessage("§cMesaj 1–240 karakter olmalı.");return;}
             String text=raw.strip().replaceAll("[\\p{Cntrl}§]","");
             this.defer(player,page,()->page.input.accept(text));return;
         }
@@ -980,9 +1001,9 @@ TabCompleter {
         Object object = prepareAnvilEvent.getInventory().getHolder();
         if (object instanceof Page) {
             Page page = (Page)object;
-            if (page.input != null && (object = prepareAnvilEvent.getInventory().getRenameText()) != null && !((String)object).isBlank()) {
-                prepareAnvilEvent.getInventory().setRepairCost(0);
-                prepareAnvilEvent.setResult(AdminController.item(Material.PAPER, (String)object, "Mesaj\u0131 \u00f6nizlemek i\u00e7in t\u0131kla"));
+            if (page.input != null && (object = prepareAnvilEvent.getView().getRenameText()) != null && (page.allowBlank || !((String)object).isBlank())) {
+                prepareAnvilEvent.getView().setRepairCost(0);
+                prepareAnvilEvent.setResult(AdminController.item(Material.PAPER, ((String)object).isBlank()?"Ödülsüz":(String)object, "Mesaj\u0131 \u00f6nizlemek i\u00e7in t\u0131kla"));
             }
         }
     }
@@ -1032,6 +1053,7 @@ TabCompleter {
         boolean busy;
         Runnable refresh;
         Consumer<String> input;
+        boolean allowBlank;
         Runnable escape;
 
         Page(Player player, String string) {
@@ -1058,6 +1080,8 @@ TabCompleter {
         int team;
         String world = "";
         boolean announce;
+        String prize="";boolean mentionEveryone;boolean mentionHere;
+        AnnouncementSettings announcement(){return new AnnouncementSettings(prize,mentionEveryone,mentionHere);}
         Set<String> scenarios = new LinkedHashSet<String>();
 
         private Draft() {

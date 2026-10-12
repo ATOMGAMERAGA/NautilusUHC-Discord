@@ -3,7 +3,8 @@ import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { getSetting, processedEvents } from './db.js';
 import { baseEmbed, brandFooter, Colors, Assets, Brand } from './embeds.js';
-import { trDateTime, discordTime, formatSeconds, clean, codeText } from './util.js';
+import { formatSeconds, clean, codeText } from './util.js';
+import { buildMatchAnnouncement } from './matchannouncements.js';
 import { bridgeQueue, MAX_POLL_WAIT_MS, ANONYMOUS_INSTANCE_PREFIX } from './bridgequeue.js';
 import { publicStats } from './statsproxy.js';
 import { serveResourcePack } from './resourcepack.js';
@@ -212,95 +213,8 @@ function authenticate(req, raw) {
  */
 const testTitle = (_test, title) => title;
 
-/** Takım boyutu → okunur mod adı. */
-const modeLabel = (teamSize) => (teamSize > 1 ? `To${teamSize}` : 'FFA (Solo)');
-
-const scenarioList = (scenarios) => (scenarios?.length ? clean(scenarios.join(', '), 300) : '—');
-
 function eventEmbed(type, data, test) {
   switch (type) {
-    case 'match_scheduled': {
-      const e = baseEmbed(test ? Colors.warn : Colors.info)
-        .setTitle(testTitle(test, '📅 Maç Planlandı'))
-        .setDescription(`Sıradaki UHC maçı ${discordTime(data.startsAt, 'R')} başlıyor — `
-          + `**${data.slot ?? trDateTime(data.startsAt)}** (TR).`)
-        .setThumbnail(Assets.item.diamondSword)
-        .setImage(Assets.wordmarkScene)
-        .addFields(
-          { name: 'Başlangıç', value: discordTime(data.startsAt, 'f'), inline: true },
-          { name: 'Mod', value: modeLabel(data.teamSize), inline: true },
-          { name: 'Host', value: clean(data.host ?? '—', 30), inline: true },
-        );
-      if (data.scenarios?.length) {
-        e.addFields({ name: 'Senaryolar', value: scenarioList(data.scenarios), inline: false });
-      }
-      if (data.settings) {
-        const s = data.settings;
-        const line = [
-          s.pvpAt != null ? `PvP ${s.pvpAt}. dk` : null,
-          s.healAt != null ? `Heal ${s.healAt}. dk` : null,
-          s.borderSize != null ? `Border ±${s.borderSize}` : null,
-          s.latecomerWindow != null ? `Geç katılım ${s.latecomerWindow} dk` : null,
-        ].filter(Boolean).join(' • ');
-        if (line) e.addFields({ name: 'Ayarlar', value: line, inline: false });
-      }
-      return e.addFields({
-        name: 'Katılım',
-        value: `\`${Brand.domain}\` sunucusuna gir ve \`/maç katıl\` yaz.\n`
-          + 'Katılmak için Discord hesabının bağlı olması gerekir (`/link`).',
-      }).setTimestamp();
-    }
-
-    case 'match_start':
-      return baseEmbed(test ? Colors.warn : Colors.success)
-        .setTitle(testTitle(test, '⚔️ Maç Başladı'))
-        .setDescription(`Maç \`${Brand.domain}\` sunucusunda başladı. Canlı durum için \`/maç canlı\`.`)
-        .setThumbnail(Assets.item.diamondSword)
-        .addFields(
-          { name: 'Oyuncu', value: String(data.players ?? '—'), inline: true },
-          { name: 'Host', value: clean(data.host ?? '—', 30), inline: true },
-          { name: 'Senaryolar', value: scenarioList(data.scenarios), inline: true },
-        )
-        .setTimestamp(new Date(data.startedAt ?? Date.now()));
-
-    case 'match_end': {
-      const winner = clean(data.winner ?? '', 40);
-      const e = baseEmbed(test ? Colors.warn : Colors.brand)
-        .setTitle(testTitle(test, winner ? `🏆 ${winner} Kazandı` : '🏆 Maç Bitti'))
-        .setThumbnail(Assets.item.goldenApple)
-        .setDescription(winner
-          ? `Maç sona erdi. Kazanan: **${winner}**.`
-          : 'Maç sona erdi.')
-        .addFields(
-          { name: 'Süre', value: formatSeconds(data.durationSecs ?? 0), inline: true },
-          { name: 'Katılımcı', value: String(data.participantCount ?? '—'), inline: true },
-        );
-      // MVP oylaması sonucu. Veri yoksa (test maçı, solo, oylama kapalı) alan
-      // sessizce atlanır.
-      if (data.mvpName) {
-        e.addFields({
-          name: 'MVP',
-          value: data.mvpVotes
-            ? `${clean(data.mvpName, 30)} — ${data.mvpVotes} oy, ${data.mvpKills ?? 0} kill`
-            : `${clean(data.mvpName, 30)} — ${data.mvpKills ?? 0} kill`,
-          inline: true,
-        });
-      }
-      if (data.top?.length) {
-        e.addFields({
-          name: 'En çok kill',
-          value: data.top.slice(0, 5).map((p, i) => {
-            const medal = ['🥇', '🥈', '🥉'][i] ?? `**${i + 1}.**`;
-            return `${medal} ${clean(p.name, 20)} — ${p.kills} kill`;
-          }).join('\n'),
-        });
-      }
-      if (data.matchId != null) {
-        e.addFields({ name: 'Ayrıntı', value: `\`/maç detay ${data.matchId}\`` });
-      }
-      return e.setTimestamp(new Date(data.endedAt ?? Date.now()));
-    }
-
     case 'match_cancelled':
       return baseEmbed(Colors.danger)
         .setTitle(testTitle(test, '❌ Maç İptal Edildi'))
@@ -416,20 +330,12 @@ function eventEmbed(type, data, test) {
   }
 }
 
-/**
- * Kanal duyurusunun payload'ını üretir (embed + rol etiketi + allowedMentions).
- * DM aboneliği (Faz 4) aynı üreticiyi kullanır ki içerik drift etmesin.
- */
-export function buildAnnouncement(type, data, test) {
+/** Match previews, live channel announcements and DMs share one builder. */
+export function buildAnnouncement(type, data = {}, test = false, options = {}) {
+  const match = buildMatchAnnouncement(type, data, test, options);
+  if (match) return match;
   const embed = eventEmbed(type, data, test);
-  if (!embed) return null;
-  let content;
-  const allowedMentions = { parse: [] };
-  if (!test && (type === 'match_scheduled' || (type === 'match_start' && !data.plannedAnnouncement))) {
-    content = '@everyone';
-    allowedMentions.parse = ['everyone'];
-  }
-  return { content, embeds: [embed], allowedMentions };
+  return embed ? { content: undefined, embeds: [embed], allowedMentions: { parse: [] } } : null;
 }
 
 /**

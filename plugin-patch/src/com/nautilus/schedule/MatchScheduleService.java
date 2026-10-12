@@ -83,9 +83,11 @@ public final class MatchScheduleService {
     }
 
     public String scheduleDetailed(String string2, UUID uUID, long l, List<String> list, double d, String string3, int n, boolean bl) {
-        if (this.storageError != null) {
-            return this.storageError;
-        }
+        return scheduleDetailed(string2,uUID,l,list,d,string3,n,bl,com.nautilus.admin.AnnouncementSettings.DEFAULT);
+    }
+
+    public String scheduleDetailed(String string2,UUID uUID,long l,List<String> list,double d,String string3,int n,boolean bl,com.nautilus.admin.AnnouncementSettings announcement) {
+        if (this.storageError != null) {return this.storageError;}
         if (string3 == null) {
             return "Ge\u00e7ersiz d\u00fcnya se\u00e7imi.";
         }
@@ -102,7 +104,7 @@ public final class MatchScheduleService {
             return "Discord k\u00f6pr\u00fcs\u00fc haz\u0131r de\u011fil; \u00f6nce ba\u011flant\u0131y\u0131 ayarla veya Discord duyurusunu kapat.";
         }
         try {
-            ScheduleBook.Plan plan = this.book.add(TimeService.currentMillis(), l, string2, uUID, list, d, string3, n, bl);
+            ScheduleBook.Plan plan = this.book.add(TimeService.currentMillis(), l, string2, uUID, list, d, string3, n, bl,announcement);
             if (bl) {
                 this.notifySafely(() -> this.scheduledNotice(new Entry(plan)));
             }
@@ -226,7 +228,7 @@ public final class MatchScheduleService {
     }
 
     private void scheduledNotice(Entry entry) {
-        AdminBootstrap.withAnnouncementTeam(entry.teamLimit, () -> this.plugin.getIntegration().bridge().matchScheduled(this.slot(entry.startAt), entry.startAt, entry.hostName, entry.scenarios, true));
+        com.nautilus.admin.AnnouncementRuntime.withScheduled(new com.nautilus.admin.MatchAnnouncementContext(entry.hostId,entry.hostName,entry.teamLimit,entry.scenarios,entry.announcement), () -> this.plugin.getIntegration().bridge().matchScheduled(this.slot(entry.startAt), entry.startAt, entry.hostName, entry.scenarios, true));
     }
 
     public String reannounce(UUID uUID) {
@@ -276,11 +278,13 @@ public final class MatchScheduleService {
 
                     @Override
                     public String prepare() {
+                        if(plan.teamLimit()>1 && MatchScheduleService.this.plugin.getTeams().teamNumbers().stream().anyMatch(team->MatchScheduleService.this.plugin.getTeams().memberCount(team)>plan.teamLimit()))return "Mevcut takım planlanan boyuttan büyük; önce takımları düzenle.";
                         return WorldSelection.prepareForStart(MatchScheduleService.this.plugin, plan.worldName());
                     }
 
                     @Override
                     public void apply() {
+                        if(plan.teamLimit()==1)MatchScheduleService.this.plugin.getTeams().clearAssignments();
                         MatchScheduleService.this.plugin.getTeams().setLimit(plan.teamLimit());
                         MatchScheduleService.this.plugin.getScenarios().disableAll();
                         for (String string : plan.scenarios()) {
@@ -292,7 +296,9 @@ public final class MatchScheduleService {
 
                     @Override
                     public boolean start() {
-                        boolean accepted=MatchScheduleService.this.plugin.getUhcMatch().forceStartScheduled(plan.hostName());
+                        final boolean[] result={false};
+                        com.nautilus.admin.AnnouncementRuntime.launch(MatchScheduleService.this.plugin,new com.nautilus.admin.MatchAnnouncementContext(plan.hostId(),plan.hostName(),plan.teamLimit(),plan.scenarios(),plan.announcement()),()->result[0]=MatchScheduleService.this.plugin.getUhcMatch().forceStartScheduled(plan.hostName()));
+                        boolean accepted=result[0];
                         if(accepted) com.nautilus.admin.LaunchAnnouncement.mark(com.nautilus.bridge.FeatureBridge.matchEpoch(MatchScheduleService.this.plugin),plan.announce());
                         return accepted;
                     }
@@ -400,6 +406,7 @@ public final class MatchScheduleService {
         public final String worldName;
         public final int teamLimit;
         public final boolean announce;
+        public final com.nautilus.admin.AnnouncementSettings announcement;
         public final ScheduleBook.Status status;
         public final String note;
 
@@ -417,6 +424,7 @@ public final class MatchScheduleService {
             this.worldName = plan.worldName();
             this.teamLimit = plan.teamLimit();
             this.announce = plan.announce();
+            this.announcement=plan.announcement();
             this.status = plan.status();
             this.note = plan.note();
             this.started = this.status == ScheduleBook.Status.STARTED;

@@ -21,6 +21,8 @@ import { parseDuration, formatDuration } from '../util.js';
 import { mcapi } from '../mcapi.js';
 import { ticketPanelComponents } from '../tickets.js';
 import { TICKET_TYPES } from '../ticketcore.js';
+import { openMessageStudio } from '../messagestudio.js';
+import { sampleMatchAnnouncements } from '../matchannouncements.js';
 
 function parseColor(input) {
   if (!input) return Colors.brand;
@@ -216,6 +218,16 @@ export default [
       .setName('admin')
       .setDescription('Bot ayarlarını ve panellerini yönetir')
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addSubcommand((s) => s.setName('dm')
+        .setDescription('Özel DM düzenleyici: metin, embed, butonlar ve kişisel şablonlar')
+        .addBooleanOption((o) => o.setName('test').setDescription('Bütün hedefleri yalnız senin DM’ine yönlendir')))
+      .addSubcommand((s) => s.setName('macmesajtest')
+        .setDescription('Maç embedlerini bu kanalda test eder; bildirim etiketi veya abone DM’i göndermez')
+        .addStringOption((o) => o.setName('tür').setDescription('Test edilecek maç mesajı')
+          .addChoices({ name: 'Hepsi', value: 'all' }, { name: 'Maç planı', value: 'match_scheduled' },
+            { name: 'Maç açıldı', value: 'match_start' }, { name: 'Maç sonucu', value: 'match_end' }))
+        .addStringOption((o) => o.setName('ödül').setDescription('Örnek ödül metni (boş = ödülsüz)').setMaxLength(300))
+        .addIntegerOption((o) => o.setName('takım').setDescription('1 = FFA, 2 = To2, 3 = To3').setMinValue(1).setMaxValue(3)))
       .addSubcommand((s) => s.setName('dclinkgönder')
         .setDescription('Hesap bağlama panelini link kanalına gönderir'))
       .addSubcommand((s) => s.setName('logkanal')
@@ -341,6 +353,17 @@ export default [
     async execute(interaction) {
       const group = interaction.options.getSubcommandGroup(false);
       const sub = interaction.options.getSubcommand();
+
+      if (sub === 'dm') return openMessageStudio(interaction, { kind: 'dm', test: interaction.options.getBoolean('test') ?? false });
+      if (sub === 'macmesajtest') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const samples = sampleMatchAnnouncements(interaction.user.id, {
+          type: interaction.options.getString('tür') ?? 'all', prize: interaction.options.getString('ödül') ?? '',
+          teamSize: interaction.options.getInteger('takım') ?? 1,
+        });
+        for (const sample of samples) await interaction.channel.send(sample.payload);
+        return interaction.editReply({ embeds: [okEmbed(`${samples.length} örnek maç mesajı bu kanala gönderildi. Bildirim ve abone DM’i gönderilmedi.`, 'Maç Mesajı Testi')], allowedMentions: { parse: [] } });
+      }
 
       if (group === 'elorank') {
         return handleEloRank(interaction, sub);
@@ -767,41 +790,31 @@ export default [
     tier: Tier.ADMIN,
     data: new SlashCommandBuilder()
       .setName('embed')
-      .setDescription('Bot adına özel bir embed kartı gönderir')
+      .setDescription('Özel metin, embed ve butonlar için mesaj düzenleyiciyi açar')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-      .addChannelOption((o) => o.setName('kanal').setDescription('Hedef kanal')
-        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true))
-      .addStringOption((o) => o.setName('başlık').setDescription('Embed başlığı').setRequired(true))
-      .addStringOption((o) => o.setName('açıklama').setDescription('Embed açıklaması (\\n = satır sonu)').setRequired(true))
-      .addStringOption((o) => o.setName('renk').setDescription('Hex renk (örn: #e74c3c)'))
-      .addStringOption((o) => o.setName('resim').setDescription('Büyük resim URL'))
-      .addStringOption((o) => o.setName('küçük-resim').setDescription('Küçük resim (thumbnail) URL'))
-      .addStringOption((o) => o.setName('alt-yazı').setDescription('Footer yazısı')),
+      .addChannelOption((o) => o.setName('kanal').setDescription('Başlangıç hedef kanalı')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))
+      .addStringOption((o) => o.setName('başlık').setDescription('Başlangıç embed başlığı').setMaxLength(256))
+      .addStringOption((o) => o.setName('açıklama').setDescription('Başlangıç açıklaması').setMaxLength(4000))
+      .addStringOption((o) => o.setName('renk').setDescription('HEX renk, örn: #00B3B3').setMaxLength(7))
+      .addStringOption((o) => o.setName('resim').setDescription('Büyük resim URL').setMaxLength(2048))
+      .addStringOption((o) => o.setName('küçük-resim').setDescription('Küçük resim URL').setMaxLength(2048))
+      .addStringOption((o) => o.setName('alt-yazı').setDescription('Alt yazı').setMaxLength(2048))
+      .addStringOption((o) => o.setName('metin').setDescription('Embed dışındaki özel metin').setMaxLength(2000))
+      .addBooleanOption((o) => o.setName('test').setDescription('Bütün gönderimler yalnız senin DM’ine gitsin')),
     async execute(interaction) {
-      const channel = interaction.options.getChannel('kanal', true);
-      const embed = baseEmbed(parseColor(interaction.options.getString('renk')))
-        .setTitle(interaction.options.getString('başlık', true))
-        .setDescription(interaction.options.getString('açıklama', true).replace(/\\n/g, '\n'));
-      const image = interaction.options.getString('resim');
-      const thumb = interaction.options.getString('küçük-resim');
-      const footer = interaction.options.getString('alt-yazı');
-      if (image) embed.setImage(image);
-      if (thumb) embed.setThumbnail(thumb);
-      if (footer) embed.setFooter({ text: footer });
-      try {
-        await channel.send({ embeds: [embed] });
-      } catch (err) {
-        console.error('[admin] embed gönderilemedi:', err.message);
-        return interaction.reply({
-          embeds: [errEmbed('Embed gönderilemedi. Görsel bağlantılarının geçerli olduğundan ve botun '
-            + `${channel} kanalına yazma izni olduğundan emin ol.`, 'Embed Gönderilemedi')],
-          flags: MessageFlags.Ephemeral,
-        });
+      const embed = {};
+      const values = { title: 'başlık', description: 'açıklama', color: 'renk', image: 'resim', thumbnail: 'küçük-resim' };
+      for (const [key, option] of Object.entries(values)) {
+        const value = interaction.options.getString(option);
+        if (value !== null && value !== undefined) embed[key] = value.replace(/\\n/g, '\n');
       }
-      addCase('embed', null, interaction.user.id, null, `#${channel.name}`);
-      return interaction.reply({
-        embeds: [okEmbed(`Embed ${channel} kanalında yayında.`, '📨 Embed Gönderildi')],
-        flags: MessageFlags.Ephemeral,
+      const footer = interaction.options.getString('alt-yazı');
+      if (footer) embed.footer = { text: footer };
+      return openMessageStudio(interaction, {
+        kind: 'channel', test: interaction.options.getBoolean('test') ?? false,
+        channelId: interaction.options.getChannel('kanal')?.id ?? interaction.channelId,
+        draft: { embed, content: interaction.options.getString('metin') ?? '' },
       });
     },
   },

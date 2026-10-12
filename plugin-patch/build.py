@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='nautilus-build-') as tmp:
    if replaced(n):continue
    data=base.read(n)
    if n=='plugin.yml':
-    text=data.decode();text=re.sub(r'(?m)^version:.*$','version: 1.2.8',text)
+    text=data.decode();text=re.sub(r'(?m)^version:.*$','version: 1.2.9',text)
     if not re.search(r'(?m)^  teamadmin:',text):text=text.replace('commands:\n','commands:\n  teamadmin:\n    description: Takımları yönetim panelinden düzenler\n    usage: /teamadmin\n    permission: nautilus.host\n\n',1)
     data=text.encode()
    if n=='config.yml':data=re.sub(rb'(?m)^(\s*token:\s*).+$',rb'\1""',data)
