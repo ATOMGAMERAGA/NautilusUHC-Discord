@@ -1,0 +1,34 @@
+{
+  "observedAt": null,
+  "runtime": {
+    "javaVersion": null,
+    "serverSoftware": null,
+    "paperCompatible": null,
+    "minecraftVersion": null,
+    "plugins": null
+  },
+  "discord": {
+    "ready": null,
+    "guildId": null,
+    "configuredGuildId": null,
+    "intents": null,
+    "portalMembersIntentEnabled": null,
+    "guildPermissions": null,
+    "botHighestRolePosition": null,
+    "linkedRole": { "position": null, "managed": null },
+    "categoryId": null,
+    "globalId": null,
+    "category": { "id": null, "guildId": null, "type": null, "permissions": null, "childCount": null },
+    "global": { "id": null, "guildId": null, "type": null, "permissions": null },
+    "managedChannels": null
+  },
+  "bridge": {
+    "expectedInstanceId": null,
+    "stats": null,
+    "authentication": { "botSecretConfigured": null, "pluginSecretConfigured": null, "sharedSecretMatches": null }
+  },
+  "database": { "reachable": null, "integrity": null, "requiredTablesPresent": null },
+  "teams": null,
+  "voice": null,
+  "world": { "ready": null, "selectedWorldExists": null, "requiredDatapacks": null, "enabledDatapacks": null }
+}

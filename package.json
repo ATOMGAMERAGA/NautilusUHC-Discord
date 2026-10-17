@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "node scripts/check.js",
+    "preflight": "node scripts/readiness-preflight.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

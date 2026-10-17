@@ -45,7 +45,7 @@ function modal(token,action) {
  const inputs=[];
  if(['create','move','remove'].includes(action))inputs.push(['player','Minecraft oyuncu adı veya UUID']);
  if(['move','disband'].includes(action))inputs.push(['team','Takım numarası']);
- if(action==='size')inputs.push(['size','Takım boyutu (1–100)']);
+ if(action==='size')inputs.push(['size','Takım boyutu (1–4)']);
  for(const [id,label] of inputs)m.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(64)));
  return m;
 }
@@ -90,6 +90,7 @@ export async function handleTeamAdmin(interaction) {
   for(const key of arg==='size'?['size']:['move','disband'].includes(arg)?['team']:[]) {
    const input=interaction.fields.getTextInputValue(key).trim();if(!/^\d{1,3}$/.test(input))return interaction.reply({content:'Pozitif bir sayı gir.',flags:MessageFlags.Ephemeral});body[key]=Number(input);
   }
+  if(arg==='size'&&(body.size<1||body.size>4))return interaction.reply({content:'Takım boyutu FFA (1), To2, To3 veya To4 olmalı.',flags:MessageFlags.Ephemeral});
   if(arg==='disband'){session.pending=body;return confirm(interaction,token,arg);}
   return apply(interaction,session,body,token);
  }

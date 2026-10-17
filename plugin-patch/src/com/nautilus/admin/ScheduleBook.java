@@ -81,8 +81,8 @@ public final class ScheduleBook {
         if (!Double.isFinite(d) || d < 0.1 || d > 100.0) {
             throw new IllegalArgumentException("Ma\u00e7 s\u00fcresi \u00e7arpan\u0131 ge\u00e7ersiz.");
         }
-        if (n < 1 || n > 3) {
-            throw new IllegalArgumentException("Takım boyutu FFA, To2 veya To3 olmalı.");
+        if (n < 1 || n > 4) {
+            throw new IllegalArgumentException("Takım boyutu FFA, To2, To3 veya To4 olmalı.");
         }
         if (string3 == null || !string3.isEmpty() && !string3.matches("[A-Za-z0-9_-]{1,120}")) {
             throw new IllegalArgumentException("Ge\u00e7ersiz d\u00fcnya ad\u0131.");

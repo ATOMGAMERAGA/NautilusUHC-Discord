@@ -1,0 +1,159 @@
+{
+  "observedAt": "2026-10-17T07:44:51.684Z",
+  "discord": {
+    "configuredGuildId": "1521979737201836233",
+    "guildId": "1521979737201836233",
+    "ready": true,
+    "portalMembersIntentEnabled": true,
+    "guildPermissions": [
+      "CreateInstantInvite",
+      "Administrator",
+      "AddReactions",
+      "Stream",
+      "ViewChannel",
+      "SendMessages",
+      "EmbedLinks",
+      "AttachFiles",
+      "ReadMessageHistory",
+      "UseExternalEmojis",
+      "Connect",
+      "Speak",
+      "UseVAD",
+      "ChangeNickname",
+      "UseApplicationCommands",
+      "RequestToSpeak",
+      "CreatePublicThreads",
+      "CreatePrivateThreads",
+      "UseExternalStickers",
+      "SendMessagesInThreads",
+      "UseEmbeddedActivities",
+      "UseSoundboard",
+      "UseExternalSounds",
+      "SendVoiceMessages",
+      "SetVoiceChannelStatus",
+      "SendPolls",
+      "UseExternalApps"
+    ],
+    "botHighestRolePosition": 15,
+    "linkedRole": {
+      "position": 1,
+      "managed": false
+    },
+    "categoryId": "1522215362857406654",
+    "globalId": "1522216892658614272",
+    "category": {
+      "id": "1522215362857406654",
+      "type": 4,
+      "guildId": "1521979737201836233",
+      "permissions": [
+        "CreateInstantInvite",
+        "Administrator",
+        "AddReactions",
+        "Stream",
+        "ViewChannel",
+        "SendMessages",
+        "EmbedLinks",
+        "AttachFiles",
+        "ReadMessageHistory",
+        "UseExternalEmojis",
+        "Connect",
+        "Speak",
+        "UseVAD",
+        "ChangeNickname",
+        "UseApplicationCommands",
+        "RequestToSpeak",
+        "CreatePublicThreads",
+        "CreatePrivateThreads",
+        "UseExternalStickers",
+        "SendMessagesInThreads",
+        "UseEmbeddedActivities",
+        "UseSoundboard",
+        "UseExternalSounds",
+        "SendVoiceMessages",
+        "SetVoiceChannelStatus",
+        "SendPolls",
+        "UseExternalApps"
+      ],
+      "childCount": 2
+    },
+    "global": {
+      "id": "1522216892658614272",
+      "type": 2,
+      "guildId": "1521979737201836233",
+      "permissions": [
+        "CreateInstantInvite",
+        "Administrator",
+        "AddReactions",
+        "Stream",
+        "ViewChannel",
+        "SendMessages",
+        "EmbedLinks",
+        "AttachFiles",
+        "ReadMessageHistory",
+        "UseExternalEmojis",
+        "Connect",
+        "Speak",
+        "UseVAD",
+        "ChangeNickname",
+        "UseApplicationCommands",
+        "RequestToSpeak",
+        "CreatePublicThreads",
+        "CreatePrivateThreads",
+        "UseExternalStickers",
+        "SendMessagesInThreads",
+        "UseEmbeddedActivities",
+        "UseSoundboard",
+        "UseExternalSounds",
+        "SendVoiceMessages",
+        "SetVoiceChannelStatus",
+        "SendPolls",
+        "UseExternalApps"
+      ]
+    },
+    "managedChannels": [],
+    "intents": [
+      "GuildMembers",
+      "GuildVoiceStates"
+    ]
+  },
+  "database": {
+    "reachable": true,
+    "integrity": "ok",
+    "requiredTablesPresent": true
+  },
+  "runtime": {
+    "javaVersion": "21.0.12.1",
+    "serverSoftware": "Leaf",
+    "minecraftVersion": "1.21.11",
+    "paperCompatible": true,
+    "plugins": [
+      {
+        "name": "LibertyBans",
+        "enabled": null
+      }
+    ]
+  },
+  "bridge": {
+    "expectedInstanceId": null,
+    "stats": null,
+    "authentication": {
+      "botSecretConfigured": true,
+      "pluginSecretConfigured": true,
+      "sharedSecretMatches": true
+    }
+  },
+  "teams": null,
+  "voice": null,
+  "world": {
+    "ready": null,
+    "selectedWorldExists": null,
+    "requiredDatapacks": null,
+    "enabledDatapacks": [
+      "vanilla",
+      "paper",
+      "file/bukkit",
+      "file/NautilusUHC-Datapack-1.14.16.zip",
+      "file/NautilusUHC-Datapack.zip"
+    ]
+  }
+}

@@ -48,3 +48,31 @@ test('large teams remain visible within Discord description limits',()=>{
  const payload=teamPanel(big,'token');const description=payload.embeds[0].data.description;
  assert.ok(description.length<4096);for(let n=1;n<=10;n++)assert.ok(description.includes(`**Takım ${n}**`));assert.match(description,/\+92 oyuncu/);
 });
+test('To4 is presented and sent with the viewed revision',async()=>{
+ const read=mcapi.teamAdmin,write=mcapi.teamAction;mcapi.teamAdmin=async()=>({...snapshot,teamSize:4});
+ try {
+  let payload,body,shown;const actor={user:{id:'owner'},guildId:'g',member:{roles:{cache:new Map([[config.roles.admin,{}]])}}};
+  await openTeamPanel({...actor,deferReply:async()=>{},editReply:async p=>{payload=p;}});
+  assert.match(payload.embeds[0].data.description,/To4/);
+  const token=payload.components[0].toJSON().components[0].custom_id.split(':')[2];
+  await handleTeamAdmin({...actor,customId:`teamadmin:action:${token}:size`,showModal:async m=>{shown=m.toJSON();}});
+  assert.match(shown.components[0].components[0].label,/1–4/);
+  mcapi.teamAction=async b=>{body=b;return {...snapshot,teamSize:4};};
+  await handleTeamAdmin({...actor,customId:shown.custom_id,fields:{getTextInputValue:()=> '4'},isModalSubmit:()=>true,deferReply:async()=>{},editReply:async()=>{}});
+  assert.deepEqual(body,{action:'size',size:4,revision:'v1',actor:'discord:owner'});
+ } finally {mcapi.teamAdmin=read;mcapi.teamAction=write;}
+});
+test('unsupported team sizes are rejected before submitting a bridge mutation',async()=>{
+ const read=mcapi.teamAdmin,write=mcapi.teamAction;mcapi.teamAdmin=async()=>snapshot;
+ try {
+  let payload;const actor={user:{id:'owner'},guildId:'g',member:{roles:{cache:new Map([[config.roles.admin,{}]])}}};
+  await openTeamPanel({...actor,deferReply:async()=>{},editReply:async p=>{payload=p;}});
+  const token=payload.components[0].toJSON().components[0].custom_id.split(':')[2];
+  mcapi.teamAction=async()=>{throw new Error('unsupported team size reached bridge');};
+  for(const size of ['0','5','100']) {
+   let response;
+   await handleTeamAdmin({...actor,customId:`teamadmin:submit:${token}:size`,fields:{getTextInputValue:()=>size},reply:async p=>{response=p;},isModalSubmit:()=>true,deferReply:async()=>{}});
+   assert.match(response.content,/FFA.*To4/);
+  }
+ } finally {mcapi.teamAdmin=read;mcapi.teamAction=write;}
+});
