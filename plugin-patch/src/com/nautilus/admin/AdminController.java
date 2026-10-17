@@ -314,9 +314,9 @@ TabCompleter {
             this.editor((Player)player);
         }, "Sol / sa\u011f t\u0131k: +1 / -1 dakika", "Shift ile: 5 dakika");
         this.clickButton(page, 16, Material.PLAYER_HEAD, "Takım boyutu · " + TeamPolicy.label(draft.team), (player, inventoryClickEvent) -> {
-            draft.team = Math.max(1, Math.min(3, draft.team + (inventoryClickEvent.isRightClick() ? -1 : 1)));
+            draft.team = Math.max(1, Math.min(4, draft.team + (inventoryClickEvent.isRightClick() ? -1 : 1)));
             this.editor((Player)player);
-        }, "Sol / sa\u011f t\u0131k: art\u0131r / azalt", "FFA = takımsız solo, To2 = duo, To3 = trio");
+        }, "Sol / sa\u011f t\u0131k: art\u0131r / azalt", "FFA = takımsız solo, To2 = duo, To3 = trio, To4 = squad");
         this.button(page, 20, Material.GRASS_BLOCK, "Ma\u00e7 d\u00fcnyas\u0131", player -> this.worlds((Player)player, 0, true), draft.world.isEmpty() ? "Ba\u015flang\u0131\u00e7ta aktif haz\u0131r d\u00fcnya" : draft.world, "Bu se\u00e7im di\u011fer ma\u00e7 ayarlar\u0131n\u0131 de\u011fi\u015ftirmez");
         this.button(page, 22, Material.BOOK, "Ma\u00e7 senaryolar\u0131", player -> this.scenarios((Player)player, true), "Se\u00e7ili: " + draft.scenarios.size(), "Yaln\u0131zca bu plan i\u00e7in kaydedilir");
         this.button(page, 24, draft.announce ? Material.LIME_DYE : Material.GRAY_DYE, "Discord duyurusu \u00b7 " + (draft.announce ? "A\u00e7\u0131k" : "Kapal\u0131"), player -> {
@@ -720,7 +720,7 @@ TabCompleter {
         this.frame(page, player3, this::home);
         int n = this.plugin.getTeams().getLimit();
         this.button(page, 4, Material.PLAYER_HEAD, "Tak\u0131m durumu", null, "Tak\u0131m boyutu: " + n, "Tak\u0131m say\u0131s\u0131: " + this.plugin.getTeams().teamNumbers().size(), "\u00c7evrimi\u00e7i: " + Bukkit.getOnlinePlayers().size());
-        this.button(page,20,Material.PLAYER_HEAD,"Takım boyutu · "+TeamPolicy.label(n),player->new TeamAdminGui(this.plugin).home(player,0),"FFA (takımsız), To2 veya To3 seç");
+        this.button(page,20,Material.PLAYER_HEAD,"Takım boyutu · "+TeamPolicy.label(n),player->new TeamAdminGui(this.plugin).home(player,0),"FFA (takımsız), To2, To3 veya To4 seç");
         this.button(page, 22, Material.COMPASS, "Host kat\u0131l\u0131m\u0131 \u00b7 " + (this.plugin.getUhcMatch().isHostParticipating(player3) ? "Oynuyorsun" : "\u0130zliyorsun"), player -> {
             if (this.idle((Player)player)) {
                 this.plugin.getUhcMatch().setHostParticipation((CommandSender)player, !this.plugin.getUhcMatch().isHostParticipating((Player)player));

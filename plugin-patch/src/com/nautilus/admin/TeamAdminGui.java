@@ -97,7 +97,7 @@ public final class TeamAdminGui implements Listener,CommandExecutor {
  }
  private void size(Player p){
   JsonObject state=TeamOperations.snapshot(plugin);Page v=page(p,"Takım boyutu");int current=state.get("teamSize").getAsInt();
-  for(int i=1;i<=3;i++){int s=i;JsonObject b=request(state,"size");b.addProperty("size",s);button(v,18+i,Material.PLAYER_HEAD,TeamPolicy.label(s),x->apply(x,b));}
+  for(int i=1;i<=4;i++){int s=i;JsonObject b=request(state,"size");b.addProperty("size",s);button(v,18+i,Material.PLAYER_HEAD,TeamPolicy.label(s),x->apply(x,b));}
   button(v,45,Material.ARROW,"Geri",x->home(x,0));p.openInventory(v.inv);
  }
  @EventHandler(priority=EventPriority.HIGHEST)public void click(InventoryClickEvent e){

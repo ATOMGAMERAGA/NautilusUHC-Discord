@@ -9,8 +9,8 @@ public class MatchAnnouncementTest {
  public static void main(String[] args)throws Exception{
   Path path=Files.createTempDirectory("match-settings-test").resolve("schedule.properties");UUID host=UUID.randomUUID();
   ScheduleBook book=new ScheduleBook(path,0,1);
-  try{book.add(0,1000,"Host",host,List.of(),1,"",4,false);throw new AssertionError("To4 was accepted; team sizes must be FFA/To2/To3");}catch(IllegalArgumentException expected){}
-  check(!TeamPolicy.canJoin(2,4,false),"oversized team policy accepted To4");
+  try{book.add(0,1000,"Host",host,List.of(),1,"",5,false);throw new AssertionError("To5 was accepted; supported team sizes stop at To4");}catch(IllegalArgumentException expected){}
+  check(!TeamPolicy.canJoin(2,5,false),"oversized team policy accepted To5");
   Class<?> type;
   try{type=Class.forName("com.nautilus.admin.AnnouncementSettings");}catch(ClassNotFoundException ex){throw new AssertionError("per-match prize/mention settings missing",ex);}
   HostPreferences preferences=new HostPreferences(path.resolveSibling("host-preferences.properties"));

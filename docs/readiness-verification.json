@@ -1,0 +1,36 @@
+{
+  "baseCommit": "d01ead02fde07af466a271e5e3828febdbf4a13c",
+  "node": {
+    "tests": 420,
+    "pass": 420,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0
+  },
+  "java": {
+    "passedTestClasses": 21,
+    "failed": 0,
+    "skipped": 0
+  },
+  "baseline": {
+    "nodePassed": 352,
+    "nodeFailed": 0,
+    "nodeSkipped": 7,
+    "javaPassedTestClasses": 17
+  },
+  "focusedVoiceGuardPassed": 48,
+  "preflightPassed": 26,
+  "npmCheck": "PASS",
+  "npmAuditVulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "liveDiscordMoves": "NOT_RUN",
+  "liveFullMatch": "NOT_RUN",
+  "deployment": "NOT_PERFORMED",
+  "outputJarSha256": "cb85055ec8fdba7f2671959a360e119e9c8a251bb29f6b0c1d1c4f54173bf773"
+}

@@ -210,7 +210,16 @@ export function createMcApi({
         const res = await queue.enqueue({
           method, path, body: body ?? null, targetInstance: queueTarget,
         }, timeoutMs);
-        const shaped = shape(res.status, res.data, {
+        // Voice state is destructive authority: another server appearing while
+        // this read awaited its response makes that state unsafe to apply.
+        const completedStatus = path === '/api/voice'
+          ? bridgeStatus({ requireSingleInstance: true }) : null;
+        const ambiguity = completedStatus?.errorCode === 'multiple_plugin_instances'
+          ? completedStatus : null;
+        const shaped = ambiguity ? {
+          ok: false, errorCode: ambiguity.errorCode, error: ambiguity.error,
+          transport: 'reverse', correlationId,
+        } : shape(res.status, res.data, {
           transport: 'reverse', correlationId, claimedBy: res.claimedBy, pollId: res.claimedPollId,
         });
         logResult({

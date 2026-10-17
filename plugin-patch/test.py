@@ -7,6 +7,7 @@ names=a.tests or sorted(x.stem for x in (root/'test').glob('*Test.java'))
 cp=os.pathsep.join([str(pathlib.Path(a.jar).resolve())]+[str(x) for x in pathlib.Path(a.api_dir).rglob('*.jar')])
 with tempfile.TemporaryDirectory(prefix='nautilus-tests-') as temp:
  sources=[str(root/'test'/f'{name}.java') for name in names]+[str(x) for x in (root/'test'/'support').glob('*.java')]
+ if any(name.endswith('ReadinessTest') for name in names):sources += [str(x) for x in (root/'test'/'readiness').glob('*.java')]
  subprocess.run([a.java_bin+'/javac','-encoding','UTF-8','--release','21','-cp',cp,'-d',temp]+sources,check=True)
  failed=[]
  for name in names:
