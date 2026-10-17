@@ -5,6 +5,15 @@ maç planlama ve Discord duyuru sınıflarının kaynaklarını, derleme betikle
 ve regresyon testlerini tutar. Pluginin geri kalan kaynağı burada değildir; derleme mevcut
 JAR'a karşı yapılır ve JAR'daki diğer girişler bayt bayt korunur.
 
+## 1.2.11 giriş ekranı düzeltmesi
+
+Açık şifre formu, oyuncunun hareket/bakış paketleri nedeniyle yeniden açılmaz;
+böylece yazılan şifre bu paketler yüzünden temizlenmez. İlk ekran kurtarma,
+dünya/kaynak paketi geçişleri ve tek kullanımlık form doğrulaması korunur.
+`LoginUiStateTest` doğrudan derlenen JAR'daki sınıfı çalıştırır.
+Bu sürümün testleri, dosya hash'i ve canlıya uygulanmadığına ilişkin ayrıntılar:
+[`docs/AUTH-DIALOG-FIX-2026-10-17.md`](../docs/AUTH-DIALOG-FIX-2026-10-17.md).
+
 
 ## 1.2.9 maç ödülü ve duyuru ayarları
 
