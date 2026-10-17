@@ -1,6 +1,8 @@
 # NautilusUHC production readiness — 17 Ekim 2026
 
-**Karar: NO-GO — mevcut canlı sürüm için.** Doğrulanan P0/P1 düzeltmeleri aşağıdaki ayrı dal ve 1.2.10 JAR'da hazırdır; talep gereği canlıya dağıtılmadı. Düzeltmeler dağıtılıp aşağıdaki gerçek ses/maç provası geçerse karar **CONDITIONAL GO** olarak yeniden değerlendirilebilir. Testlerden %100 sorunsuzluk sonucu çıkarılamaz.
+**Dağıtım sonrası güncelleme:** Kullanıcının açık onayından sonra 1.2.10 JAR ve bot canlıya alındı; Dokploy deployment `done`, MC 20 TPS. Gerçek Discord API/Gateway üzerinde yalnız bot hesabıyla 18 ses/izin kontrolü geçti; geçici kanallar/rol temizlendi, kalıcı kayıtlar korundu. Güncel karar **CONDITIONAL GO**; tam insan oyunculu UHC maçı yapılmadı ve seçilecek maç dünyasının hazırlığı ayrıca doğrulanmalıdır. [Dağıtım ve canlı test kaydı](DEPLOYMENT-2026-10-17.md).
+
+**Aşağıdaki ilk denetimin kararı: NO-GO — o anda çalışan 1.2.9 için.** Doğrulanan P0/P1 düzeltmeleri aşağıdaki ayrı dal ve 1.2.10 JAR'da hazırdır; talep gereği canlıya dağıtılmadı. Düzeltmeler dağıtılıp aşağıdaki gerçek ses/maç provası geçerse karar **CONDITIONAL GO** olarak yeniden değerlendirilebilir. Testlerden %100 sorunsuzluk sonucu çıkarılamaz.
 
 Denetim tabanı: `d01ead02fde07af466a271e5e3828febdbf4a13c`. Çalışma dalı: `codex/readiness-129`. İstenen kapsam [özgün talepte](readiness-request-2026-10-17.md) korunmuştur. Varsayımlar veya doğrulanamayan canlı koşullar başarılı sayılmadı.
 

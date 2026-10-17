@@ -29,8 +29,45 @@
     "critical": 0,
     "total": 0
   },
-  "liveDiscordMoves": "NOT_RUN",
+  "liveDiscordMoves": "PASS_BOT_ACCOUNT_ONLY",
   "liveFullMatch": "NOT_RUN",
-  "deployment": "NOT_PERFORMED",
-  "outputJarSha256": "cb85055ec8fdba7f2671959a360e119e9c8a251bb29f6b0c1d1c4f54173bf773"
+  "deployment": "PERFORMED_AFTER_EXPLICIT_USER_APPROVAL",
+  "outputJarSha256": "cb85055ec8fdba7f2671959a360e119e9c8a251bb29f6b0c1d1c4f54173bf773",
+  "postApprovalDeployment": {
+    "sourceMergeCommit": "5a02b41145e4451b41b62d16076d3b360e104014",
+    "dokployDeploymentId": "7qubflnP0NtQ8F3oY_Rx1",
+    "status": "done",
+    "minecraftPluginVersion": "1.2.10",
+    "jarSha256": "cb85055ec8fdba7f2671959a360e119e9c8a251bb29f6b0c1d1c4f54173bf773",
+    "discordLiveChecks": 18,
+    "minecraftStateAuthority": "controlled_synthetic_snapshots_not_actual_UHC_match",
+    "allTemporaryDiscordChannelsAndRoleRemoved": true,
+    "preexistingDiscordChannelsPreserved": true,
+    "configUnchanged": true,
+    "teamAndAuthRecordsPreserved": true,
+    "gameDataCountsPreserved": {
+      "players": {
+        "before": 2128,
+        "after": 2128
+      },
+      "matches": {
+        "before": 114,
+        "after": 114
+      },
+      "discord_links": {
+        "before": 55,
+        "after": 55
+      },
+      "match_participants": {
+        "before": 502,
+        "after": 502
+      },
+      "inventories": {
+        "before": 392,
+        "after": 392
+      }
+    },
+    "currentDecision": "CONDITIONAL GO",
+    "fullHumanMatch": "NOT_RUN"
+  }
 }

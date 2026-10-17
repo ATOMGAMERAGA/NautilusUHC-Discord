@@ -1,0 +1,43 @@
+{
+  "observedAt": "2026-10-17T08:13:27.423Z",
+  "ok": true,
+  "checks": [
+    "real_DISCORD_testses_bot_voice",
+    "actual_linked_unlinked_permission_policy",
+    "actual_manual_overwrite_drift_repaired",
+    "team:1",
+    "spectator",
+    "team:1",
+    "team:2",
+    "solo",
+    "global",
+    "team:2",
+    "two_accounts_choose_online_participant",
+    "manager_restart_reuses_actual_ids",
+    "bridge_outage_keeps_actual_channels",
+    "spectator",
+    "bridge_recovery_routes_latest_state",
+    "end_cleans_only_test_owned_channels",
+    "bot_left_voice",
+    "preexisting_channels_preserved"
+  ],
+  "failure": null,
+  "realDiscordAPI": true,
+  "voiceActor": "bot_account_only",
+  "minecraftStateAuthority": "controlled_synthetic_snapshots_not_actual_UHC_match",
+  "createdChannelIds": [
+    "1560928610997772362",
+    "1560928614034186260",
+    "1560928615531675679",
+    "1560928617024852089",
+    "1560928667637645394",
+    "1560928669545791498",
+    "1560928671177510962",
+    "1560928672481808504",
+    "1560928673803280445"
+  ],
+  "createdRoleIds": [
+    "1560928608766267432"
+  ],
+  "gatewayVoiceTransitions": 17
+}
